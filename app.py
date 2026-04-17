@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, render_template, request
 
+from btc_tracker import __version__
 from btc_tracker.config import load_config
 from btc_tracker.db import (
     get_alert_events,
@@ -23,7 +24,7 @@ init_db(config.database_path)
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_version=__version__)
 
 
 @app.get("/api/status")
@@ -35,6 +36,7 @@ def api_status():
             "latest_price": latest_price,
             "next_check_at": _next_check_at(latest_price, settings["poll_frequency_minutes"]),
             "settings": settings,
+            "version": __version__,
         }
     )
 

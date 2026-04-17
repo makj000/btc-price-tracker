@@ -55,6 +55,16 @@ input {
   color: var(--accent-dark);
 }
 
+.version-tag {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 4px 10px;
+  border: 1px solid rgba(142, 74, 11, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.08em;
+}
+
 h1,
 h2,
 p {
