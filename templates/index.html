@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BTC Price Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">CoinMarketCap + Twilio</p>
+          <h1>BTC price tracker</h1>
+          <p class="intro">
+            Poll BTC/USD on your chosen interval, keep your own local history, and trigger
+            SMS alerts only when thresholds are crossed.
+          </p>
+        </div>
+        <button id="run-poll-button" class="secondary-button" type="button">Run Check Now</button>
+      </section>
+
+      <section class="grid top-grid">
+        <article class="card stat-card">
+          <p class="label">Latest BTC price</p>
+          <p id="latest-price" class="price">$--</p>
+          <p id="latest-updated" class="muted">No samples yet</p>
+          <p id="next-check" class="muted">Next check: --</p>
+        </article>
+
+        <article class="card settings-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Settings</p>
+              <h2>Alert configuration</h2>
+            </div>
+          </div>
+          <form id="settings-form" class="settings-form compact-settings-form">
+            <label class="field">
+              <span class="field-label">High threshold</span>
+              <input id="high-threshold-input" name="high_threshold" type="number" min="0" step="0.01" />
+            </label>
+            <label class="field">
+              <span class="field-label">Low threshold</span>
+              <input id="low-threshold-input" name="low_threshold" type="number" min="0" step="0.01" />
+            </label>
+            <label class="field">
+              <span class="field-label">Frequency (min)</span>
+              <input id="frequency-input" name="poll_frequency_minutes" type="number" min="5" step="1" />
+            </label>
+            <label class="field field-wide">
+              <span class="field-label">Alert phone</span>
+              <input id="alert-phone-input" name="alert_phone" type="tel" placeholder="+15557654321" />
+            </label>
+            <label class="field">
+              <span class="field-label">Cooldown</span>
+              <input
+                id="cooldown-input"
+                name="alert_cooldown_minutes"
+                type="number"
+                min="1"
+                step="1"
+              />
+            </label>
+            <label class="checkbox-row">
+              <input id="sms-enabled-input" name="sms_enabled" type="checkbox" />
+              <span>Send SMS when alerts trigger</span>
+            </label>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">Save Thresholds</button>
+              <p id="settings-status" class="muted"></p>
+            </div>
+          </form>
+        </article>
+      </section>
+
+      <section class="card chart-card">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">History</p>
+            <h2>Recent price samples</h2>
+          </div>
+          <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
+        </div>
+        <div id="chart-empty" class="chart-empty">No price history yet. Run a check to populate the chart.</div>
+        <svg id="history-chart" class="chart" viewBox="0 0 800 280" preserveAspectRatio="none"></svg>
+      </section>
+
+      <section>
+        <article class="card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Alerts</p>
+              <h2>Recent trigger log</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Price</th>
+                  <th>Threshold</th>
+                  <th>SMS</th>
+                  <th>Message</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="alerts-table-body">
+                <tr>
+                  <td colspan="6" class="muted">No alerts recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
