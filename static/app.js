@@ -1,6 +1,10 @@
 const state = {
   history: [],
   settings: null,
+  alerts: [],
+  alertsOffset: 0,
+  alertsHasMore: true,
+  alertsLoading: false,
 };
 
 const latestPriceEl = document.getElementById("latest-price");
@@ -10,25 +14,28 @@ const settingsStatusEl = document.getElementById("settings-status");
 const chartEl = document.getElementById("history-chart");
 const chartEmptyEl = document.getElementById("chart-empty");
 const alertsTableBodyEl = document.getElementById("alerts-table-body");
+const alertsTableWrapEl = document.getElementById("alerts-table-wrap");
+const alertsMetaEl = document.getElementById("alerts-meta");
+const alertsLoadingEl = document.getElementById("alerts-loading");
+const ALERTS_PAGE_SIZE = 40;
 
 async function loadDashboard() {
-  const [statusResponse, historyResponse, alertsResponse] = await Promise.all([
+  const [statusResponse, historyResponse] = await Promise.all([
     fetch("/api/status"),
     fetch("/api/history?limit=288"),
-    fetch("/api/alerts?limit=20"),
   ]);
 
   const statusPayload = await statusResponse.json();
   const historyPayload = await historyResponse.json();
-  const alertsPayload = await alertsResponse.json();
 
   state.settings = statusPayload.settings;
   state.history = historyPayload.history;
+  resetAlertsState();
 
   renderStatus(statusPayload.latest_price, statusPayload.next_check_at);
   renderHistory(historyPayload.history);
   renderSettingsForm(statusPayload.settings);
-  renderAlerts(alertsPayload.alerts);
+  await loadMoreAlerts();
 }
 
 function renderStatus(latestPrice, nextCheckAt) {
@@ -88,6 +95,7 @@ function renderHistory(history) {
 
 function renderAlerts(alerts) {
   if (!alerts.length) {
+    alertsMetaEl.textContent = "No alerts recorded yet.";
     alertsTableBodyEl.innerHTML = `
       <tr>
         <td colspan="6" class="muted">No alerts recorded yet.</td>
@@ -100,16 +108,55 @@ function renderAlerts(alerts) {
     .map(
       (alert) => `
         <tr>
-          <td>${alert.alert_type}</td>
-          <td>${formatMoney(alert.price_usd)}</td>
-          <td>${formatThreshold(alert.threshold_value)}</td>
-          <td>${escapeHtml(alert.sms_status)}</td>
-          <td>${escapeHtml(alert.sms_message)}</td>
-          <td>${formatDateTime(alert.triggered_at)}</td>
+          <td title="${escapeHtml(alert.alert_type)}">${escapeHtml(alert.alert_type)}</td>
+          <td title="${escapeHtml(formatMoney(alert.price_usd))}">${formatMoney(alert.price_usd)}</td>
+          <td title="${escapeHtml(formatThreshold(alert.threshold_value))}">${formatThreshold(alert.threshold_value)}</td>
+          <td title="${escapeHtml(alert.sms_status)}">${escapeHtml(alert.sms_status)}</td>
+          <td title="${escapeHtml(alert.sms_message)}">${escapeHtml(alert.sms_message)}</td>
+          <td title="${escapeHtml(formatDateTime(alert.triggered_at))}">${formatDateTime(alert.triggered_at)}</td>
         </tr>
       `
     )
     .join("");
+
+  alertsMetaEl.textContent = state.alertsHasMore
+    ? `Showing ${alerts.length} alerts. Scroll for older entries.`
+    : `Showing all ${alerts.length} alerts.`;
+}
+
+function resetAlertsState() {
+  state.alerts = [];
+  state.alertsOffset = 0;
+  state.alertsHasMore = true;
+  state.alertsLoading = false;
+  alertsTableWrapEl.scrollTop = 0;
+  alertsMetaEl.textContent = "Loading alert history...";
+  alertsLoadingEl.hidden = true;
+}
+
+async function loadMoreAlerts() {
+  if (state.alertsLoading || !state.alertsHasMore) {
+    return;
+  }
+
+  state.alertsLoading = true;
+  alertsLoadingEl.hidden = false;
+
+  try {
+    const response = await fetch(`/api/alerts?limit=${ALERTS_PAGE_SIZE}&offset=${state.alertsOffset}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Loading alerts failed.");
+    }
+
+    state.alerts = state.alerts.concat(payload.alerts);
+    state.alertsOffset += payload.alerts.length;
+    state.alertsHasMore = payload.alerts.length === ALERTS_PAGE_SIZE;
+    renderAlerts(state.alerts);
+  } finally {
+    state.alertsLoading = false;
+    alertsLoadingEl.hidden = true;
+  }
 }
 
 document.getElementById("settings-form").addEventListener("submit", async (event) => {
@@ -154,6 +201,14 @@ document.getElementById("run-poll-button").addEventListener("click", async () =>
 
   settingsStatusEl.textContent = `Price updated: ${formatMoney(payload.price_usd)}`;
   await loadDashboard();
+});
+
+alertsTableWrapEl.addEventListener("scroll", () => {
+  const nearBottom =
+    alertsTableWrapEl.scrollTop + alertsTableWrapEl.clientHeight >= alertsTableWrapEl.scrollHeight - 80;
+  if (nearBottom) {
+    loadMoreAlerts().catch(showError);
+  }
 });
 
 function readNumberInput(id) {

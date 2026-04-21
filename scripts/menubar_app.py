@@ -66,7 +66,7 @@ class BTCMenuBarApp(rumps.App):
         try:
             result = run_poll_cycle(self.config)
         except Exception:
-            self._set_title("BTC --")
+            self._set_title("--")
             return
 
         price = result["price_usd"]
@@ -80,7 +80,7 @@ class BTCMenuBarApp(rumps.App):
         else:
             status = "normal"
 
-        self._set_title(f"BTC ${price:,.0f}", status=status)
+        self._set_title(f"${price:,.0f}", status=status)
 
         for event in result["alerts"]:
             if event["alert_type"] in ("HIGH", "LOW"):

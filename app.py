@@ -51,8 +51,10 @@ def api_history():
 @app.get("/api/alerts")
 def api_alerts():
     requested_limit = request.args.get("limit", default=50, type=int)
+    requested_offset = request.args.get("offset", default=0, type=int)
     limit = max(1, min(requested_limit, 200))
-    return jsonify({"alerts": get_alert_events(config.database_path, limit=limit)})
+    offset = max(0, requested_offset)
+    return jsonify({"alerts": get_alert_events(config.database_path, limit=limit, offset=offset)})
 
 
 @app.get("/api/settings")

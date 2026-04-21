@@ -189,7 +189,7 @@ def add_alert_event(
         )
 
 
-def get_alert_events(database_path: Path, limit: int = 50) -> list[dict[str, Any]]:
+def get_alert_events(database_path: Path, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     with connect(database_path) as connection:
         rows = connection.execute(
             """
@@ -197,8 +197,9 @@ def get_alert_events(database_path: Path, limit: int = 50) -> list[dict[str, Any
             FROM alert_events
             ORDER BY triggered_at DESC, id DESC
             LIMIT ?
+            OFFSET ?
             """,
-            (limit,),
+            (limit, max(0, offset)),
         ).fetchall()
 
     return [dict(row) for row in rows]
