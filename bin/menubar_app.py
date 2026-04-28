@@ -42,6 +42,7 @@ class BTCMenuBarApp(rumps.App):
         self._startup_timer.start()
 
     def _set_title(self, text: str, status: str = "normal") -> None:
+        # Uses NSAttributedString instead of rumps' plain .title to support colored text in the status bar.
         if not hasattr(self, "_nsapp") or not hasattr(self._nsapp, "nsstatusitem"):
             return
         if status == "high":
@@ -88,7 +89,7 @@ class BTCMenuBarApp(rumps.App):
         else:
             status = "normal"
 
-        self._set_title(f"${price:,.0f}", status=status)
+        self._set_title(f"${price/1000:.0f}k", status=status)
 
         for event in result["alerts"]:
             if event["alert_type"] in ("HIGH", "LOW"):
