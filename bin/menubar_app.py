@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 import shlex
 from urllib.error import URLError
@@ -16,8 +17,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from btc_tracker.config import load_config
-from btc_tracker.db import get_settings, init_db
+from btc_tracker.db import get_latest_price_sample, get_settings, init_db
 from btc_tracker.poller import run_poll_cycle
+from btc_tracker.schedule import next_scheduled_check_at
 
 
 class BTCMenuBarApp(rumps.App):
@@ -58,8 +60,14 @@ class BTCMenuBarApp(rumps.App):
 
     def _heartbeat(self, _) -> None:
         settings = get_settings(self.config.database_path)
-        freq_seconds = settings["poll_frequency_minutes"] * 60
-        if time.time() - self._last_poll_time >= freq_seconds:
+        latest_sample = get_latest_price_sample(self.config.database_path)
+        if latest_sample is None:
+            self._do_poll()
+            return
+
+        fetched_at = self._parse_timestamp(latest_sample["fetched_at"])
+        next_check_at = next_scheduled_check_at(fetched_at, settings["poll_frequency_minutes"])
+        if datetime.now(timezone.utc) >= next_check_at and time.time() - self._last_poll_time >= 30:
             self._do_poll()
 
     def _do_poll(self) -> None:
@@ -102,6 +110,12 @@ class BTCMenuBarApp(rumps.App):
     def _run_check_now(self, _) -> None:
         self._do_poll()
 
+    def _parse_timestamp(self, value: str) -> datetime:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
     def _restart_app(self, _) -> None:
         subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve())],
@@ -129,7 +143,7 @@ class BTCMenuBarApp(rumps.App):
     def _server_command(self) -> list[str]:
         venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
         python_bin = venv_python if venv_python.exists() else Path(sys.executable)
-        return [str(python_bin), str(PROJECT_ROOT / "app.py")]
+        return [str(python_bin), str(PROJECT_ROOT / "bin" / "web_app.py")]
 
     def _launch_dashboard_server_with_logs(self) -> None:
         command = " ".join(shlex.quote(part) for part in self._server_command())

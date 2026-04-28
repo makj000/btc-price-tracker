@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template, request
 
@@ -15,10 +15,15 @@ from btc_tracker.db import (
     save_settings,
 )
 from btc_tracker.poller import run_poll_cycle
+from btc_tracker.schedule import (
+    VALID_POLL_FREQUENCY_ERROR,
+    is_valid_poll_frequency,
+    next_scheduled_check_at,
+)
 
 
 config = load_config()
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../templates', static_folder='../static')
 init_db(config.database_path)
 
 
@@ -65,20 +70,21 @@ def api_settings():
 @app.post("/api/settings")
 def api_save_settings():
     payload = request.get_json(force=True, silent=False) or {}
+    existing = get_settings(config.database_path)
 
     try:
         values = {
-            "high_threshold": _number_or_none(payload.get("high_threshold")),
-            "low_threshold": _number_or_none(payload.get("low_threshold")),
-            "alert_phone": (payload.get("alert_phone") or "").strip() or None,
-            "sms_enabled": bool(payload.get("sms_enabled", True)),
+            "high_threshold": _number_or_none(payload.get("high_threshold", existing["high_threshold"])),
+            "low_threshold": _number_or_none(payload.get("low_threshold", existing["low_threshold"])),
+            "alert_phone": (payload.get("alert_phone", existing["alert_phone"]) or "").strip() or None,
+            "sms_enabled": bool(payload.get("sms_enabled", existing["sms_enabled"])),
             "poll_frequency_minutes": _parse_minutes(
-                payload.get("poll_frequency_minutes", 5),
+                payload.get("poll_frequency_minutes", existing["poll_frequency_minutes"]),
                 minimum=5,
                 field_name="poll_frequency_minutes",
             ),
             "alert_cooldown_minutes": _parse_minutes(
-                payload.get("alert_cooldown_minutes", 60),
+                payload.get("alert_cooldown_minutes", existing["alert_cooldown_minutes"]),
                 minimum=1,
                 field_name="alert_cooldown_minutes",
             ),
@@ -86,7 +92,6 @@ def api_save_settings():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    existing = get_settings(config.database_path)
     if values["high_threshold"] != existing["high_threshold"]:
         values["high_alert_active"] = False
     if values["low_threshold"] != existing["low_threshold"]:
@@ -115,19 +120,23 @@ def _parse_minutes(value, *, minimum: int, field_name: str) -> int:
     minutes = int(value)
     if minutes < minimum:
         raise ValueError(f"{field_name} must be at least {minimum}.")
+    if field_name == "poll_frequency_minutes" and not is_valid_poll_frequency(minutes):
+        raise ValueError(VALID_POLL_FREQUENCY_ERROR)
     return minutes
 
 
 def _next_check_at(latest_price, frequency_minutes: int):
-    if not latest_price:
-        return None
-    fetched_at = latest_price["fetched_at"].replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(fetched_at)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    else:
-        parsed = parsed.astimezone(timezone.utc)
-    return (parsed + timedelta(minutes=frequency_minutes)).isoformat()
+    reference = datetime.now(timezone.utc)
+    if latest_price:
+        fetched_at = latest_price["fetched_at"].replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(fetched_at)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        if parsed > reference:
+            reference = parsed
+    return next_scheduled_check_at(reference, frequency_minutes).isoformat()
 
 
 if __name__ == "__main__":
