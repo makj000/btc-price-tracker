@@ -6,7 +6,9 @@ from typing import Any
 from btc_tracker.cmc import fetch_btc_quote
 from btc_tracker.config import AppConfig
 from btc_tracker.db import add_alert_event, add_price_sample, get_settings, init_db, save_settings
+from btc_tracker.schedule import next_scheduled_check_at
 from btc_tracker.sms import SmsDeliveryError, send_sms
+from btc_tracker.telegram import TelegramDeliveryError, send_telegram
 
 
 def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
@@ -64,7 +66,7 @@ def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
     return {
         "price_usd": price_usd,
         "fetched_at": fetched_at,
-        "next_check_at": (now + timedelta(minutes=settings["poll_frequency_minutes"])).isoformat(),
+        "next_check_at": next_scheduled_check_at(now, settings["poll_frequency_minutes"]).isoformat(),
         "alerts": alert_results,
         "settings": settings,
     }
@@ -138,6 +140,16 @@ def _handle_threshold(
     elif settings.get("sms_enabled") and not recipient:
         sms_status = "skipped: no recipient configured"
 
+    telegram_status = "skipped"
+    if config.telegram_bot_token and config.telegram_chat_id:
+        try:
+            send_telegram(config, text=message)
+            telegram_status = "sent"
+        except TelegramDeliveryError as exc:
+            telegram_status = f"failed: {exc}"
+        except Exception as exc:
+            telegram_status = f"failed: {exc}"
+
     timestamp = now.isoformat()
     add_alert_event(
         config.database_path,
@@ -147,6 +159,7 @@ def _handle_threshold(
         triggered_at=timestamp,
         sms_status=sms_status,
         sms_message=message,
+        telegram_status=telegram_status,
     )
 
     settings_updates[active_key] = True
@@ -160,6 +173,7 @@ def _handle_threshold(
             "triggered_at": timestamp,
             "sms_status": sms_status,
             "sms_message": message,
+            "telegram_status": telegram_status,
         },
     }
 

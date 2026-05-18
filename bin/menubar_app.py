@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-import shlex
-from urllib.error import URLError
-from urllib.request import urlopen
 
 import rumps
 from AppKit import NSAttributedString, NSColor, NSForegroundColorAttributeName
@@ -17,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from btc_tracker.config import load_config
-from btc_tracker.db import get_latest_price_sample, get_settings, init_db
+from btc_tracker.db import get_latest_price_sample, get_settings, init_db, save_settings, seed_thresholds
 from btc_tracker.poller import run_poll_cycle
 from btc_tracker.schedule import next_scheduled_check_at
 
@@ -27,13 +23,25 @@ class BTCMenuBarApp(rumps.App):
         super().__init__("BTC", quit_button="Quit")
         self.config = load_config()
         init_db(self.config.database_path)
+        seed_thresholds(self.config.database_path, self.config.seed_high_threshold, self.config.seed_low_threshold)
         self._last_poll_time = 0.0
 
+        self._price_item = rumps.MenuItem("BTC: —")
+        self._high_item = rumps.MenuItem("↑ High: not set")
+        self._low_item = rumps.MenuItem("↓ Low: not set")
+
         self.menu = [
-            rumps.MenuItem("Open Dashboard", callback=self._open_dashboard),
-            rumps.MenuItem("Run Check Now", callback=self._run_check_now),
-            rumps.MenuItem("Restart", callback=self._restart_app),
+            self._price_item,
             None,
+            self._high_item,
+            self._low_item,
+            None,
+            rumps.MenuItem("Set High Threshold…", callback=self._set_high_threshold),
+            rumps.MenuItem("Set Low Threshold…", callback=self._set_low_threshold),
+            rumps.MenuItem("Clear High Threshold", callback=self._clear_high_threshold),
+            rumps.MenuItem("Clear Low Threshold", callback=self._clear_low_threshold),
+            None,
+            rumps.MenuItem("Run Check Now", callback=self._run_check_now),
         ]
 
         self._timer = rumps.Timer(self._heartbeat, 30)
@@ -42,7 +50,6 @@ class BTCMenuBarApp(rumps.App):
         self._startup_timer.start()
 
     def _set_title(self, text: str, status: str = "normal") -> None:
-        # Uses NSAttributedString instead of rumps' plain .title to support colored text in the status bar.
         if not hasattr(self, "_nsapp") or not hasattr(self._nsapp, "nsstatusitem"):
             return
         if status == "high":
@@ -55,18 +62,24 @@ class BTCMenuBarApp(rumps.App):
         attributed = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
         self._nsapp.nsstatusitem.button().setAttributedTitle_(attributed)
 
+    def _update_menu_items(self, price: float | None, settings: dict) -> None:
+        high = settings.get("high_threshold")
+        low = settings.get("low_threshold")
+        self._price_item.title = f"BTC: ${price:,.0f}" if price is not None else "BTC: —"
+        self._high_item.title = f"↑ High: ${high:,.0f}" if high is not None else "↑ High: not set"
+        self._low_item.title = f"↓ Low: ${low:,.0f}" if low is not None else "↓ Low: not set"
+
     def _startup_poll(self, timer: rumps.Timer) -> None:
         timer.stop()
         self._do_poll()
 
     def _heartbeat(self, _) -> None:
         settings = get_settings(self.config.database_path)
-        latest_sample = get_latest_price_sample(self.config.database_path)
-        if latest_sample is None:
+        latest = get_latest_price_sample(self.config.database_path)
+        if latest is None:
             self._do_poll()
             return
-
-        fetched_at = self._parse_timestamp(latest_sample["fetched_at"])
+        fetched_at = self._parse_timestamp(latest["fetched_at"])
         next_check_at = next_scheduled_check_at(fetched_at, settings["poll_frequency_minutes"])
         if datetime.now(timezone.utc) >= next_check_at and time.time() - self._last_poll_time >= 30:
             self._do_poll()
@@ -82,6 +95,7 @@ class BTCMenuBarApp(rumps.App):
         settings = result["settings"]
         high = settings["high_threshold"]
         low = settings["low_threshold"]
+
         if low is not None and price <= low:
             status = "low"
         elif high is not None and price >= high:
@@ -89,24 +103,68 @@ class BTCMenuBarApp(rumps.App):
         else:
             status = "normal"
 
-        self._set_title(f"${price/1000:.0f}k", status=status)
+        self._set_title(f"${price / 1000:.0f}k", status=status)
+        self._update_menu_items(price, settings)
 
         for event in result["alerts"]:
             if event["alert_type"] in ("HIGH", "LOW"):
                 direction = "above" if event["alert_type"] == "HIGH" else "below"
-                threshold = event["threshold_value"]
                 rumps.notification(
                     title="BTC Price Alert",
-                    subtitle=f"${price:,.0f} - {direction} ${threshold:,.0f}",
+                    subtitle=f"${price:,.0f} — {direction} ${event['threshold_value']:,.0f}",
                     message=event["sms_message"],
                 )
                 break
 
         self._last_poll_time = time.time()
 
-    def _open_dashboard(self, _) -> None:
-        self._ensure_dashboard_running()
-        subprocess.Popen(["open", self._dashboard_url()])
+    def _set_high_threshold(self, _) -> None:
+        current = get_settings(self.config.database_path)["high_threshold"]
+        window = rumps.Window(
+            title="Set High Threshold",
+            message="Alert when BTC rises above this price (USD).\nLeave blank to clear.",
+            default_text=f"{current:.0f}" if current is not None else "",
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(220, 22),
+        )
+        response = window.run()
+        if response.clicked:
+            raw = response.text.strip()
+            value = float(raw) if raw else None
+            save_settings(self.config.database_path, {"high_threshold": value, "high_alert_active": False})
+            self._refresh_display()
+
+    def _set_low_threshold(self, _) -> None:
+        current = get_settings(self.config.database_path)["low_threshold"]
+        window = rumps.Window(
+            title="Set Low Threshold",
+            message="Alert when BTC falls below this price (USD).\nLeave blank to clear.",
+            default_text=f"{current:.0f}" if current is not None else "",
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(220, 22),
+        )
+        response = window.run()
+        if response.clicked:
+            raw = response.text.strip()
+            value = float(raw) if raw else None
+            save_settings(self.config.database_path, {"low_threshold": value, "low_alert_active": False})
+            self._refresh_display()
+
+    def _clear_high_threshold(self, _) -> None:
+        save_settings(self.config.database_path, {"high_threshold": None, "high_alert_active": False})
+        self._refresh_display()
+
+    def _clear_low_threshold(self, _) -> None:
+        save_settings(self.config.database_path, {"low_threshold": None, "low_alert_active": False})
+        self._refresh_display()
+
+    def _refresh_display(self) -> None:
+        settings = get_settings(self.config.database_path)
+        latest = get_latest_price_sample(self.config.database_path)
+        price = latest["price_usd"] if latest else None
+        self._update_menu_items(price, settings)
 
     def _run_check_now(self, _) -> None:
         self._do_poll()
@@ -116,56 +174,6 @@ class BTCMenuBarApp(rumps.App):
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
-
-    def _restart_app(self, _) -> None:
-        subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve())],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        rumps.quit_application()
-
-    def _dashboard_url(self) -> str:
-        return f"http://{self.config.flask_host}:{self.config.flask_port}"
-
-    def _dashboard_healthcheck_url(self) -> str:
-        return f"{self._dashboard_url()}/api/status"
-
-    def _is_dashboard_running(self) -> bool:
-        try:
-            with urlopen(self._dashboard_healthcheck_url(), timeout=1):
-                return True
-        except URLError:
-            return False
-        except Exception:
-            return False
-
-    def _server_command(self) -> list[str]:
-        venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
-        python_bin = venv_python if venv_python.exists() else Path(sys.executable)
-        return [str(python_bin), str(PROJECT_ROOT / "bin" / "web_app.py")]
-
-    def _launch_dashboard_server_with_logs(self) -> None:
-        command = " ".join(shlex.quote(part) for part in self._server_command())
-        terminal_command = f"cd {shlex.quote(str(PROJECT_ROOT))} && {command}"
-        subprocess.Popen(
-            ["osascript", "-e", f'tell application "Terminal" to do script "{terminal_command}"'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-    def _ensure_dashboard_running(self) -> None:
-        if self._is_dashboard_running():
-            return
-
-        self._launch_dashboard_server_with_logs()
-
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            if self._is_dashboard_running():
-                return
-            time.sleep(0.25)
 
 
 if __name__ == "__main__":

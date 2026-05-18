@@ -21,6 +21,10 @@ class AppConfig:
     default_alert_to: str
     flask_host: str
     flask_port: int
+    telegram_bot_token: str
+    telegram_chat_id: str
+    seed_high_threshold: float | None
+    seed_low_threshold: float | None
 
 
 def load_config() -> AppConfig:
@@ -40,4 +44,14 @@ def load_config() -> AppConfig:
         default_alert_to=os.getenv("DEFAULT_ALERT_TO", "").strip(),
         flask_host=os.getenv("FLASK_HOST", "127.0.0.1"),
         flask_port=int(os.getenv("FLASK_PORT", "8000")),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        seed_high_threshold=_to_float_or_none(os.getenv("HIGH_THRESHOLD", "").strip()),
+        seed_low_threshold=_to_float_or_none(os.getenv("LOW_THRESHOLD", "").strip()),
     )
+
+
+def _to_float_or_none(value: str) -> float | None:
+    if not value:
+        return None
+    return float(value)

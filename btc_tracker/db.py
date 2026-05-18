@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from btc_tracker.schedule import coerce_poll_frequency
+
 
 DEFAULT_SETTINGS = {
     "high_threshold": "",
@@ -64,6 +66,7 @@ def init_db(database_path: Path) -> None:
             """
         )
         _migrate_alert_events_schema(connection)
+        _migrate_telegram_status_column(connection)
 
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
@@ -78,12 +81,13 @@ def get_settings(database_path: Path) -> dict[str, Any]:
 
     values = {row["key"]: row["value"] for row in rows}
     merged = {**DEFAULT_SETTINGS, **values}
+    poll_frequency_minutes = coerce_poll_frequency(int(merged["poll_frequency_minutes"]))
     return {
         "high_threshold": _to_float_or_none(merged["high_threshold"]),
         "low_threshold": _to_float_or_none(merged["low_threshold"]),
         "alert_phone": merged["alert_phone"] or None,
         "sms_enabled": merged["sms_enabled"] == "1",
-        "poll_frequency_minutes": int(merged["poll_frequency_minutes"]),
+        "poll_frequency_minutes": poll_frequency_minutes,
         "alert_cooldown_minutes": int(merged["alert_cooldown_minutes"]),
         "high_alert_active": merged["high_alert_active"] == "1",
         "low_alert_active": merged["low_alert_active"] == "1",
@@ -110,6 +114,19 @@ def save_settings(database_path: Path, values: dict[str, Any]) -> dict[str, Any]
             )
 
     return get_settings(database_path)
+
+
+def seed_thresholds(database_path: Path, high: float | None, low: float | None) -> None:
+    if high is None and low is None:
+        return
+    settings = get_settings(database_path)
+    updates = {}
+    if high is not None and settings["high_threshold"] is None:
+        updates["high_threshold"] = high
+    if low is not None and settings["low_threshold"] is None:
+        updates["low_threshold"] = low
+    if updates:
+        save_settings(database_path, updates)
 
 
 def add_price_sample(database_path: Path, price_usd: float, fetched_at: str, source: str = "coinmarketcap") -> None:
@@ -165,6 +182,7 @@ def add_alert_event(
     triggered_at: str,
     sms_status: str,
     sms_message: str,
+    telegram_status: str = "skipped",
 ) -> None:
     with connect(database_path) as connection:
         connection.execute(
@@ -175,8 +193,9 @@ def add_alert_event(
                 price_usd,
                 triggered_at,
                 sms_status,
-                sms_message
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                sms_message,
+                telegram_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alert_type,
@@ -185,6 +204,7 @@ def add_alert_event(
                 triggered_at,
                 sms_status,
                 sms_message,
+                telegram_status,
             ),
         )
 
@@ -193,7 +213,7 @@ def get_alert_events(database_path: Path, limit: int = 50, offset: int = 0) -> l
     with connect(database_path) as connection:
         rows = connection.execute(
             """
-            SELECT id, alert_type, threshold_value, price_usd, triggered_at, sms_status, sms_message
+            SELECT id, alert_type, threshold_value, price_usd, triggered_at, sms_status, sms_message, telegram_status
             FROM alert_events
             ORDER BY triggered_at DESC, id DESC
             LIMIT ?
@@ -247,6 +267,15 @@ def _migrate_alert_events_schema(connection: sqlite3.Connection) -> None:
         DROP TABLE alert_events_old;
         """
     )
+
+
+def _migrate_telegram_status_column(connection: sqlite3.Connection) -> None:
+    columns = connection.execute("PRAGMA table_info(alert_events)").fetchall()
+    column_names = [c["name"] for c in columns]
+    if "telegram_status" not in column_names:
+        connection.execute(
+            "ALTER TABLE alert_events ADD COLUMN telegram_status TEXT NOT NULL DEFAULT 'skipped'"
+        )
 
 
 def _serialize_setting_value(key: str, value: Any) -> str:

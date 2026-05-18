@@ -1,1 +1,1 @@
-.venv/bin/python bin/web_app.py
+PYTHONPATH=. .venv/bin/python bin/web_app.py
