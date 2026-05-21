@@ -19,6 +19,13 @@ DEFAULT_SETTINGS = {
     "low_alert_active": "0",
     "last_high_alert_at": "",
     "last_low_alert_at": "",
+    # FETH
+    "feth_high_threshold": "",
+    "feth_low_threshold": "",
+    "feth_high_alert_active": "0",
+    "feth_low_alert_active": "0",
+    "feth_last_high_alert_at": "",
+    "feth_last_low_alert_at": "",
 }
 
 
@@ -67,6 +74,7 @@ def init_db(database_path: Path) -> None:
         )
         _migrate_alert_events_schema(connection)
         _migrate_telegram_status_column(connection)
+        _migrate_symbol_columns(connection)
 
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
@@ -93,6 +101,12 @@ def get_settings(database_path: Path) -> dict[str, Any]:
         "low_alert_active": merged["low_alert_active"] == "1",
         "last_high_alert_at": merged["last_high_alert_at"] or None,
         "last_low_alert_at": merged["last_low_alert_at"] or None,
+        "feth_high_threshold": _to_float_or_none(merged["feth_high_threshold"]),
+        "feth_low_threshold": _to_float_or_none(merged["feth_low_threshold"]),
+        "feth_high_alert_active": merged["feth_high_alert_active"] == "1",
+        "feth_low_alert_active": merged["feth_low_alert_active"] == "1",
+        "feth_last_high_alert_at": merged["feth_last_high_alert_at"] or None,
+        "feth_last_low_alert_at": merged["feth_last_low_alert_at"] or None,
     }
 
 
@@ -129,26 +143,37 @@ def seed_thresholds(database_path: Path, high: float | None, low: float | None) 
         save_settings(database_path, updates)
 
 
-def add_price_sample(database_path: Path, price_usd: float, fetched_at: str, source: str = "coinmarketcap") -> None:
+def add_price_sample(
+    database_path: Path,
+    price_usd: float,
+    fetched_at: str,
+    source: str = "yahoo",
+    symbol: str = "FBTC",
+) -> None:
     with connect(database_path) as connection:
         connection.execute(
             """
-            INSERT INTO price_samples (price_usd, fetched_at, source)
-            VALUES (?, ?, ?)
+            INSERT INTO price_samples (price_usd, fetched_at, source, symbol)
+            VALUES (?, ?, ?, ?)
             """,
-            (price_usd, fetched_at, source),
+            (price_usd, fetched_at, source, symbol.upper()),
         )
 
 
-def get_latest_price_sample(database_path: Path) -> dict[str, Any] | None:
+def get_latest_price_sample(
+    database_path: Path,
+    symbol: str = "FBTC",
+) -> dict[str, Any] | None:
     with connect(database_path) as connection:
         row = connection.execute(
             """
-            SELECT id, price_usd, fetched_at, source
+            SELECT id, price_usd, fetched_at, source, symbol
             FROM price_samples
+            WHERE symbol = ?
             ORDER BY fetched_at DESC, id DESC
             LIMIT 1
-            """
+            """,
+            (symbol.upper(),),
         ).fetchone()
 
     if row is None:
@@ -156,16 +181,21 @@ def get_latest_price_sample(database_path: Path) -> dict[str, Any] | None:
     return dict(row)
 
 
-def get_price_history(database_path: Path, limit: int = 288) -> list[dict[str, Any]]:
+def get_price_history(
+    database_path: Path,
+    limit: int = 288,
+    symbol: str = "FBTC",
+) -> list[dict[str, Any]]:
     with connect(database_path) as connection:
         rows = connection.execute(
             """
-            SELECT id, price_usd, fetched_at, source
+            SELECT id, price_usd, fetched_at, source, symbol
             FROM price_samples
+            WHERE symbol = ?
             ORDER BY fetched_at DESC, id DESC
             LIMIT ?
             """,
-            (limit,),
+            (symbol.upper(), limit),
         ).fetchall()
 
     history = [dict(row) for row in rows]
@@ -183,6 +213,7 @@ def add_alert_event(
     sms_status: str,
     sms_message: str,
     telegram_status: str = "skipped",
+    symbol: str = "FBTC",
 ) -> None:
     with connect(database_path) as connection:
         connection.execute(
@@ -194,8 +225,9 @@ def add_alert_event(
                 triggered_at,
                 sms_status,
                 sms_message,
-                telegram_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                telegram_status,
+                symbol
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alert_type,
@@ -205,22 +237,41 @@ def add_alert_event(
                 sms_status,
                 sms_message,
                 telegram_status,
+                symbol.upper(),
             ),
         )
 
 
-def get_alert_events(database_path: Path, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+def get_alert_events(
+    database_path: Path,
+    limit: int = 50,
+    offset: int = 0,
+    symbol: str | None = None,
+) -> list[dict[str, Any]]:
     with connect(database_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, alert_type, threshold_value, price_usd, triggered_at, sms_status, sms_message, telegram_status
-            FROM alert_events
-            ORDER BY triggered_at DESC, id DESC
-            LIMIT ?
-            OFFSET ?
-            """,
-            (limit, max(0, offset)),
-        ).fetchall()
+        if symbol is not None:
+            rows = connection.execute(
+                """
+                SELECT id, alert_type, threshold_value, price_usd, triggered_at,
+                       sms_status, sms_message, telegram_status, symbol
+                FROM alert_events
+                WHERE symbol = ?
+                ORDER BY triggered_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (symbol.upper(), limit, max(0, offset)),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, alert_type, threshold_value, price_usd, triggered_at,
+                       sms_status, sms_message, telegram_status, symbol
+                FROM alert_events
+                ORDER BY triggered_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, max(0, offset)),
+            ).fetchall()
 
     return [dict(row) for row in rows]
 
@@ -278,8 +329,19 @@ def _migrate_telegram_status_column(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_symbol_columns(connection: sqlite3.Connection) -> None:
+    ps_cols = [c["name"] for c in connection.execute("PRAGMA table_info(price_samples)").fetchall()]
+    if "symbol" not in ps_cols:
+        connection.execute("ALTER TABLE price_samples ADD COLUMN symbol TEXT NOT NULL DEFAULT 'FBTC'")
+
+    ae_cols = [c["name"] for c in connection.execute("PRAGMA table_info(alert_events)").fetchall()]
+    if "symbol" not in ae_cols:
+        connection.execute("ALTER TABLE alert_events ADD COLUMN symbol TEXT NOT NULL DEFAULT 'FBTC'")
+
+
 def _serialize_setting_value(key: str, value: Any) -> str:
-    if key in {"sms_enabled", "high_alert_active", "low_alert_active"}:
+    if key in {"sms_enabled", "high_alert_active", "low_alert_active",
+               "feth_high_alert_active", "feth_low_alert_active"}:
         return "1" if bool(value) else "0"
     if value is None:
         return ""

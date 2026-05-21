@@ -14,6 +14,7 @@ from btc_tracker.db import (
     init_db,
     save_settings,
 )
+from btc_tracker.poller import SYMBOLS
 from btc_tracker.poller import run_poll_cycle
 from btc_tracker.schedule import (
     VALID_POLL_FREQUENCY_ERROR,
@@ -34,12 +35,14 @@ def index():
 
 @app.get("/api/status")
 def api_status():
-    latest_price = get_latest_price_sample(config.database_path)
     settings = get_settings(config.database_path)
+    latest_prices = {s: get_latest_price_sample(config.database_path, symbol=s) for s in SYMBOLS}
+    fbtc_latest = latest_prices.get("FBTC")
     return jsonify(
         {
-            "latest_price": latest_price,
-            "next_check_at": _next_check_at(latest_price, settings["poll_frequency_minutes"]),
+            "latest_price": fbtc_latest,
+            "latest_prices": latest_prices,
+            "next_check_at": _next_check_at(fbtc_latest, settings["poll_frequency_minutes"]),
             "settings": settings,
             "version": __version__,
         }
@@ -49,17 +52,25 @@ def api_status():
 @app.get("/api/history")
 def api_history():
     requested_limit = request.args.get("limit", default=288, type=int)
+    symbol = request.args.get("symbol", default="FBTC").upper()
+    if symbol not in SYMBOLS:
+        return jsonify({"error": f"Unknown symbol. Valid: {', '.join(SYMBOLS)}"}), 400
     limit = max(1, min(requested_limit, 5000))
-    return jsonify({"history": get_price_history(config.database_path, limit=limit)})
+    return jsonify({"history": get_price_history(config.database_path, limit=limit, symbol=symbol)})
 
 
 @app.get("/api/alerts")
 def api_alerts():
     requested_limit = request.args.get("limit", default=50, type=int)
     requested_offset = request.args.get("offset", default=0, type=int)
+    symbol = request.args.get("symbol", default=None)
+    if symbol is not None:
+        symbol = symbol.upper()
+        if symbol not in SYMBOLS:
+            return jsonify({"error": f"Unknown symbol. Valid: {', '.join(SYMBOLS)}"}), 400
     limit = max(1, min(requested_limit, 200))
     offset = max(0, requested_offset)
-    return jsonify({"alerts": get_alert_events(config.database_path, limit=limit, offset=offset)})
+    return jsonify({"alerts": get_alert_events(config.database_path, limit=limit, offset=offset, symbol=symbol)})
 
 
 @app.get("/api/settings")
@@ -76,6 +87,8 @@ def api_save_settings():
         values = {
             "high_threshold": _number_or_none(payload.get("high_threshold", existing["high_threshold"])),
             "low_threshold": _number_or_none(payload.get("low_threshold", existing["low_threshold"])),
+            "feth_high_threshold": _number_or_none(payload.get("feth_high_threshold", existing["feth_high_threshold"])),
+            "feth_low_threshold": _number_or_none(payload.get("feth_low_threshold", existing["feth_low_threshold"])),
             "alert_phone": (payload.get("alert_phone", existing["alert_phone"]) or "").strip() or None,
             "sms_enabled": bool(payload.get("sms_enabled", existing["sms_enabled"])),
             "poll_frequency_minutes": _parse_minutes(
@@ -96,6 +109,10 @@ def api_save_settings():
         values["high_alert_active"] = False
     if values["low_threshold"] != existing["low_threshold"]:
         values["low_alert_active"] = False
+    if values["feth_high_threshold"] != existing["feth_high_threshold"]:
+        values["feth_high_alert_active"] = False
+    if values["feth_low_threshold"] != existing["feth_low_threshold"]:
+        values["feth_low_alert_active"] = False
 
     saved = save_settings(config.database_path, values)
     return jsonify(saved)

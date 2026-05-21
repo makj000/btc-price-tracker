@@ -8,11 +8,14 @@ const state = {
   alertsLoading: false,
   hoverIndex: null,
   editingThreshold: null,
+  activeSymbol: "FBTC",
 };
 
 const settingsStatusEl = document.getElementById("settings-status");
+const chartTitleEl = document.getElementById("chart-title");
 const chartEl = document.getElementById("history-chart");
 const chartEmptyEl = document.getElementById("chart-empty");
+const symbolOptionEls = Array.from(document.querySelectorAll("[data-symbol]"));
 const alertsTableBodyEl = document.getElementById("alerts-table-body");
 const alertsTableWrapEl = document.getElementById("alerts-table-wrap");
 const alertsMetaEl = document.getElementById("alerts-meta");
@@ -27,7 +30,7 @@ const POLL_FREQUENCY_ERROR =
 async function loadDashboard() {
   const [statusResponse, historyResponse] = await Promise.all([
     fetch("/api/status"),
-    fetch("/api/history?limit=288"),
+    fetch(`/api/history?limit=288&symbol=${state.activeSymbol}`),
   ]);
 
   const statusPayload = await statusResponse.json();
@@ -38,6 +41,7 @@ async function loadDashboard() {
   state.history = historyPayload.history;
   resetAlertsState();
 
+  chartTitleEl.textContent = `${state.activeSymbol} — Recent price samples`;
   renderHistory(historyPayload.history);
   renderSettingsForm(statusPayload.settings);
   await loadMoreAlerts();
@@ -334,7 +338,11 @@ async function runPollAndRefresh() {
     throw new Error(payload.error || "Polling failed.");
   }
 
-  settingsStatusEl.textContent = `BTC: ${formatMoney(payload.price_usd)}`;
+  const syms = payload.symbols || {};
+  const parts = Object.entries(syms)
+    .filter(([, v]) => v.price_usd != null)
+    .map(([s, v]) => `${s}: ${formatMoney(v.price_usd)}`);
+  settingsStatusEl.textContent = parts.join("  |  ") || `FBTC: ${formatMoney(payload.price_usd)}`;
   await loadDashboard();
 }
 
@@ -614,6 +622,19 @@ function nextScheduledCheckAt(value, frequencyMinutes) {
   }
 
   return next.toISOString();
+}
+
+for (const el of symbolOptionEls) {
+  el.addEventListener("click", async () => {
+    const sym = el.dataset.symbol;
+    if (sym === state.activeSymbol) return;
+    state.activeSymbol = sym;
+    for (const s of symbolOptionEls) {
+      s.classList.toggle("is-active", s.dataset.symbol === sym);
+      s.setAttribute("aria-pressed", String(s.dataset.symbol === sym));
+    }
+    await loadDashboard().catch(showError);
+  });
 }
 
 loadDashboard().then(() => runPollAndRefresh()).catch(showError);

@@ -12,8 +12,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class AppConfig:
-    cmc_api_key: str
-    cmc_base_url: str
     database_path: Path
     twilio_account_sid: str
     twilio_auth_token: str
@@ -35,8 +33,6 @@ def load_config() -> AppConfig:
         database_path = BASE_DIR / database_path
 
     return AppConfig(
-        cmc_api_key=os.getenv("CMC_API_KEY", "").strip(),
-        cmc_base_url=os.getenv("CMC_BASE_URL", "https://pro-api.coinmarketcap.com").rstrip("/"),
         database_path=database_path,
         twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", "").strip(),
         twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", "").strip(),

@@ -3,24 +3,89 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from btc_tracker.cmc import fetch_btc_quote
 from btc_tracker.config import AppConfig
 from btc_tracker.db import add_alert_event, add_price_sample, get_settings, init_db, save_settings
 from btc_tracker.schedule import next_scheduled_check_at
 from btc_tracker.sms import SmsDeliveryError, send_sms
 from btc_tracker.telegram import TelegramDeliveryError, send_telegram
+from btc_tracker.yahoo import YahooFinanceError, fetch_quote
+
+SYMBOLS = ["FBTC", "FETH"]
+
+# Settings key prefixes per symbol. FBTC reuses the legacy unprefixed keys.
+_SETTINGS_PREFIX = {
+    "FBTC": "",
+    "FETH": "feth_",
+}
 
 
 def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
     init_db(config.database_path)
     settings = get_settings(config.database_path)
 
-    quote = fetch_btc_quote(api_key=config.cmc_api_key, base_url=config.cmc_base_url)
-    price_usd = float(quote["price_usd"])
-    fetched_at = str(quote["fetched_at"])
-    add_price_sample(config.database_path, price_usd=price_usd, fetched_at=fetched_at)
+    now = datetime.now(timezone.utc)
+    all_updates: dict[str, Any] = {}
+    results: dict[str, Any] = {}
 
-    now = _parse_timestamp(fetched_at)
+    for symbol in SYMBOLS:
+        try:
+            quote = fetch_quote(symbol)
+        except YahooFinanceError as exc:
+            results[symbol] = {"error": str(exc)}
+            continue
+
+        price_usd = float(quote["price_usd"])
+        fetched_at = str(quote["fetched_at"])
+        add_price_sample(config.database_path, price_usd=price_usd, fetched_at=fetched_at, symbol=symbol)
+
+        ts_now = _parse_timestamp(fetched_at)
+        prefix = _SETTINGS_PREFIX[symbol]
+        sym_settings = {**settings, **all_updates}
+        updates, alert_results = _check_thresholds(
+            config=config,
+            settings=sym_settings,
+            now=ts_now,
+            price_usd=price_usd,
+            symbol=symbol,
+            prefix=prefix,
+        )
+        all_updates.update(updates)
+        settings = {**settings, **all_updates}
+
+        if not alert_results and not _thresholds_reached(price_usd, sym_settings, prefix):
+            noop = _record_noop_event(config=config, now=ts_now, price_usd=price_usd, symbol=symbol)
+            alert_results.append(noop)
+
+        results[symbol] = {
+            "price_usd": price_usd,
+            "fetched_at": fetched_at,
+            "alerts": alert_results,
+        }
+
+    if all_updates:
+        settings = save_settings(config.database_path, all_updates)
+
+    # Primary price_usd / fetched_at from FBTC for backward-compat with callers
+    fbtc = results.get("FBTC", {})
+    return {
+        "price_usd": fbtc.get("price_usd"),
+        "fetched_at": fbtc.get("fetched_at"),
+        "next_check_at": next_scheduled_check_at(now, settings["poll_frequency_minutes"]).isoformat(),
+        "alerts": fbtc.get("alerts", []),
+        "settings": settings,
+        "symbols": results,
+    }
+
+
+def _check_thresholds(
+    *,
+    config: AppConfig,
+    settings: dict[str, Any],
+    now: datetime,
+    price_usd: float,
+    symbol: str,
+    prefix: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     updates: dict[str, Any] = {}
     alert_results: list[dict[str, Any]] = []
 
@@ -29,11 +94,12 @@ def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
         settings=settings,
         now=now,
         price_usd=price_usd,
-        threshold=settings["high_threshold"],
-        active_key="high_alert_active",
-        last_key="last_high_alert_at",
+        symbol=symbol,
+        threshold=settings[f"{prefix}high_threshold"],
+        active_key=f"{prefix}high_alert_active",
+        last_key=f"{prefix}last_high_alert_at",
         alert_type="HIGH",
-        comparison=lambda current_price, threshold_value: current_price >= threshold_value,
+        comparison=lambda p, t: p >= t,
     )
     updates.update(high_result["settings_updates"])
     if high_result["alert_event"]:
@@ -46,30 +112,18 @@ def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
         settings=settings,
         now=now,
         price_usd=price_usd,
-        threshold=settings["low_threshold"],
-        active_key="low_alert_active",
-        last_key="last_low_alert_at",
+        symbol=symbol,
+        threshold=settings[f"{prefix}low_threshold"],
+        active_key=f"{prefix}low_alert_active",
+        last_key=f"{prefix}last_low_alert_at",
         alert_type="LOW",
-        comparison=lambda current_price, threshold_value: current_price <= threshold_value,
+        comparison=lambda p, t: p <= t,
     )
     updates.update(low_result["settings_updates"])
     if low_result["alert_event"]:
         alert_results.append(low_result["alert_event"])
 
-    if updates:
-        settings = save_settings(config.database_path, updates)
-
-    if not alert_results and not _thresholds_reached(price_usd, settings):
-        noop_event = _record_noop_event(config=config, now=now, price_usd=price_usd)
-        alert_results.append(noop_event)
-
-    return {
-        "price_usd": price_usd,
-        "fetched_at": fetched_at,
-        "next_check_at": next_scheduled_check_at(now, settings["poll_frequency_minutes"]).isoformat(),
-        "alerts": alert_results,
-        "settings": settings,
-    }
+    return updates, alert_results
 
 
 def _handle_threshold(
@@ -78,6 +132,7 @@ def _handle_threshold(
     settings: dict[str, Any],
     now: datetime,
     price_usd: float,
+    symbol: str,
     threshold: float | None,
     active_key: str,
     last_key: str,
@@ -101,30 +156,25 @@ def _handle_threshold(
         return {
             "settings_updates": settings_updates,
             "alert_event": _record_suppressed_event(
-                config=config,
-                now=now,
-                price_usd=price_usd,
-                threshold=threshold,
-                alert_type=alert_type,
-                reason="threshold already active",
+                config=config, now=now, price_usd=price_usd,
+                threshold=threshold, alert_type=alert_type,
+                reason="threshold already active", symbol=symbol,
             ),
         }
     if not cooldown_ready:
         return {
             "settings_updates": settings_updates,
             "alert_event": _record_suppressed_event(
-                config=config,
-                now=now,
-                price_usd=price_usd,
-                threshold=threshold,
-                alert_type=alert_type,
-                reason="cooldown not elapsed",
+                config=config, now=now, price_usd=price_usd,
+                threshold=threshold, alert_type=alert_type,
+                reason="cooldown not elapsed", symbol=symbol,
             ),
         }
 
+    direction = "above" if alert_type == "HIGH" else "below"
     message = (
-        f"BTC price alert: BTC is ${price_usd:,.2f}, "
-        f"{'above' if alert_type == 'HIGH' else 'below'} your ${threshold:,.2f} threshold."
+        f"{symbol} price alert: {symbol} is ${price_usd:,.2f}, "
+        f"{direction} your ${threshold:,.2f} threshold."
     )
     sms_status = "skipped"
     recipient = settings.get("alert_phone") or config.default_alert_to
@@ -160,6 +210,7 @@ def _handle_threshold(
         sms_status=sms_status,
         sms_message=message,
         telegram_status=telegram_status,
+        symbol=symbol,
     )
 
     settings_updates[active_key] = True
@@ -174,6 +225,7 @@ def _handle_threshold(
             "sms_status": sms_status,
             "sms_message": message,
             "telegram_status": telegram_status,
+            "symbol": symbol,
         },
     }
 
@@ -193,17 +245,13 @@ def _cooldown_has_elapsed(now: datetime, last_sent_at: str | None, cooldown_minu
     return now >= previous + timedelta(minutes=cooldown_minutes)
 
 
-def _thresholds_reached(price_usd: float, settings: dict[str, Any]) -> bool:
-    high_threshold = settings.get("high_threshold")
-    low_threshold = settings.get("low_threshold")
-    return (
-        high_threshold is not None and price_usd >= high_threshold
-    ) or (
-        low_threshold is not None and price_usd <= low_threshold
-    )
+def _thresholds_reached(price_usd: float, settings: dict[str, Any], prefix: str) -> bool:
+    high = settings.get(f"{prefix}high_threshold")
+    low = settings.get(f"{prefix}low_threshold")
+    return (high is not None and price_usd >= high) or (low is not None and price_usd <= low)
 
 
-def _record_noop_event(*, config: AppConfig, now: datetime, price_usd: float) -> dict[str, Any]:
+def _record_noop_event(*, config: AppConfig, now: datetime, price_usd: float, symbol: str) -> dict[str, Any]:
     timestamp = now.isoformat()
     message = "No thresholds were reached on this check."
     event = {
@@ -213,6 +261,7 @@ def _record_noop_event(*, config: AppConfig, now: datetime, price_usd: float) ->
         "triggered_at": timestamp,
         "sms_status": "not_applicable",
         "sms_message": message,
+        "symbol": symbol,
     }
     add_alert_event(config.database_path, **event)
     return event
@@ -226,11 +275,12 @@ def _record_suppressed_event(
     threshold: float,
     alert_type: str,
     reason: str,
+    symbol: str,
 ) -> dict[str, Any]:
     direction = "above" if alert_type == "HIGH" else "below"
     timestamp = now.isoformat()
     message = (
-        f"BTC is ${price_usd:,.2f}, {direction} your ${threshold:,.2f} threshold, "
+        f"{symbol} is ${price_usd:,.2f}, {direction} your ${threshold:,.2f} threshold, "
         f"but no new alert was sent because {reason}."
     )
     event = {
@@ -240,6 +290,7 @@ def _record_suppressed_event(
         "triggered_at": timestamp,
         "sms_status": f"suppressed: {reason}",
         "sms_message": message,
+        "symbol": symbol,
     }
     add_alert_event(config.database_path, **event)
     return event
