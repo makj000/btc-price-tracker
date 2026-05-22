@@ -17,7 +17,11 @@ from AppKit import (
     NSMutableAttributedString,
     NSMutableParagraphStyle,
     NSParagraphStyleAttributeName,
+    NSStatusBar,
+    NSVariableStatusItemLength,
 )
+import objc
+from Foundation import NSObject
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,6 +31,18 @@ from btc_tracker.config import load_config
 from btc_tracker.db import get_latest_price_sample, get_settings, init_db, save_settings, seed_thresholds
 from btc_tracker.poller import run_poll_cycle
 from btc_tracker.schedule import next_scheduled_check_at
+
+
+class _RefreshTarget(NSObject):
+    def initWithApp_(self, app):
+        self = objc.super(_RefreshTarget, self).init()
+        if self is None:
+            return None
+        self._app = app
+        return self
+
+    def refresh_(self, sender):
+        self._app._do_poll()
 
 
 class BTCMenuBarApp(rumps.App):
@@ -75,30 +91,68 @@ class BTCMenuBarApp(rumps.App):
         self._startup_timer = rumps.Timer(self._startup_poll, 1)
         self._startup_timer.start()
 
+        self._refresh_target = _RefreshTarget.alloc().initWithApp_(self)
+        self._refresh_status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
+        btn = self._refresh_status_item.button()
+        btn.setTitle_("↻")
+        btn.setTarget_(self._refresh_target)
+        btn.setAction_("refresh:")
+
     def _set_title(self, fbtc_line: str, fbtc_bar: str, feth_line: str, feth_bar: str, status: str = "normal") -> None:
         if not hasattr(self, "_nsapp") or not hasattr(self._nsapp, "nsstatusitem"):
             return
+
         if status == "high":
-            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.45, 0.0, 1.0)
+            fbtc_color = NSColor.systemGreenColor()
         elif status == "low":
-            color = NSColor.redColor()
+            fbtc_color = NSColor.systemRedColor()
         else:
-            color = NSColor.labelColor()
+            fbtc_color = NSColor.systemOrangeColor()
+        feth_color = NSColor.systemBlueColor()
 
-        font = NSFont.monospacedSystemFontOfSize_weight_(7.0, 0.0)
-        para = NSMutableParagraphStyle.alloc().init()
-        para.setMinimumLineHeight_(7.5)
-        para.setMaximumLineHeight_(7.5)
+        text_font = NSFont.monospacedSystemFontOfSize_weight_(8.0, 0.0)
+        bar_font  = NSFont.monospacedSystemFontOfSize_weight_(5.0, 0.0)
 
-        attrs = {
-            NSForegroundColorAttributeName: color,
-            NSFontAttributeName: font,
-            NSParagraphStyleAttributeName: para,
-            NSBaselineOffsetAttributeName: -10.0,
-        }
-        text = f"{fbtc_line}\n{fbtc_bar}\n{feth_line}\n{feth_bar}"
-        attributed = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
-        self._nsapp.nsstatusitem.button().setAttributedTitle_(attributed)
+        text_para = NSMutableParagraphStyle.alloc().init()
+        text_para.setMinimumLineHeight_(8.5)
+        text_para.setMaximumLineHeight_(8.5)
+        text_para.setParagraphSpacing_(2.5)
+
+        bar_para = NSMutableParagraphStyle.alloc().init()
+        bar_para.setMinimumLineHeight_(2.0)
+        bar_para.setMaximumLineHeight_(2.0)
+
+        def _text_attrs(color):
+            return {
+                NSForegroundColorAttributeName: color,
+                NSFontAttributeName: text_font,
+                NSParagraphStyleAttributeName: text_para,
+                NSBaselineOffsetAttributeName: -9.0,
+            }
+
+        def _bar_attrs(color):
+            return {
+                NSForegroundColorAttributeName: color,
+                NSFontAttributeName: bar_font,
+                NSParagraphStyleAttributeName: bar_para,
+                NSBaselineOffsetAttributeName: -9.0,
+            }
+
+        def _seg(text, attrs):
+            return NSAttributedString.alloc().initWithString_attributes_(text, attrs)
+
+        full = NSMutableAttributedString.alloc().init()
+        full.appendAttributedString_(_seg(f"{fbtc_line}\n", _text_attrs(fbtc_color)))
+        full.appendAttributedString_(_seg(f"{fbtc_bar}\n", _bar_attrs(fbtc_color)))
+        full.appendAttributedString_(_seg(f"{feth_line}\n", _text_attrs(feth_color)))
+        full.appendAttributedString_(_seg(feth_bar,         _bar_attrs(feth_color)))
+        btn = self._nsapp.nsstatusitem.button()
+        btn.setAttributedTitle_(full)
+        btn.sizeToFit()
+        self._nsapp.nsstatusitem.setLength_(btn.frame().size.width)
+        btn.setWantsLayer_(True)
+        btn.layer().setBackgroundColor_(NSColor.whiteColor().CGColor())
+        btn.layer().setCornerRadius_(3.0)
 
     @staticmethod
     def _make_bar(price: float, low: float | None, high: float | None, width: int = 8) -> str:
@@ -151,7 +205,7 @@ class BTCMenuBarApp(rumps.App):
         try:
             result = run_poll_cycle(self.config)
         except Exception:
-            self._set_title("FBTC —", "──────────", "FETH —", "──────────")
+            self._set_title("B —", "──────────", "E —", "──────────")
             return
 
         settings = result["settings"]
@@ -176,10 +230,10 @@ class BTCMenuBarApp(rumps.App):
         feth_high = settings.get("feth_high_threshold")
         feth_low  = settings.get("feth_low_threshold")
 
-        fbtc_line = f"FBTC ${fbtc_price:.2f}" if fbtc_price is not None else "FBTC —"
-        fbtc_bar  = self._make_bar(fbtc_price, fbtc_low, fbtc_high) if fbtc_price is not None else "──────────"
-        feth_line = f"FETH ${feth_price:.2f}" if feth_price is not None else "FETH —"
-        feth_bar  = self._make_bar(feth_price, feth_low, feth_high) if feth_price is not None else "──────────"
+        fbtc_line = f"B ${fbtc_price:.2f}" if fbtc_price is not None else "B —"
+        fbtc_bar  = self._make_bar(fbtc_price, fbtc_low, fbtc_high, width=6) if fbtc_price is not None else "────────"
+        feth_line = f"E ${feth_price:.2f}" if feth_price is not None else "E —"
+        feth_bar  = self._make_bar(feth_price, feth_low, feth_high, width=6) if feth_price is not None else "────────"
         self._set_title(fbtc_line, fbtc_bar, feth_line, feth_bar, status=status)
 
         self._update_menu_items(prices, settings)
