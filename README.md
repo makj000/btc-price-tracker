@@ -1,13 +1,14 @@
-# BTC Price Tracker
+# Crypto Price Tracker
 
-Small Python app that polls the CoinMarketCap API for the BTC/USD price on a configurable interval, stores local history in SQLite, and sends SMS alerts through Twilio when the configured thresholds are crossed.
+macOS menubar app + local web dashboard that polls FBTC and FETH prices via Yahoo Finance, stores history in SQLite, and sends Telegram/SMS alerts when configured thresholds are crossed.
 
 ## Features
 
-- Local dashboard for current price, history, settings, and recent alerts
-- Cron-friendly polling script
+- macOS menubar item showing live FBTC (orange) and FETH (blue) prices with progress bars
+- Local web dashboard for price history, settings, and alert log
+- Telegram and SMS (Twilio) alerts on threshold crossings
+- Threshold re-arming logic to avoid repeated alerts while price stays above/below
 - SQLite storage for price history and alert log
-- Threshold crossing logic that avoids repeated SMS spam while the price remains above or below a threshold
 
 ## Setup
 
@@ -30,29 +31,29 @@ Small Python app that polls the CoinMarketCap API for the BTC/USD price on a con
    cp .env.example .env
    ```
 
-4. Fill in your CoinMarketCap and Twilio credentials in `.env`.
+4. Fill in your Twilio and Telegram credentials in `.env`.
 
-5. Start the web app:
+## Running
 
-   ```bash
-   python app.py
-   ```
+**Menubar app:**
 
-6. Open `http://127.0.0.1:8000`.
-
-## Cron
-
-Run the polling worker on the same interval you save in the dashboard. The minimum supported frequency is 5 minutes:
-
-```cron
-*/5 * * * * cd /Users/kma/dev/data-scraping/crypto/btc-price-tracker && /usr/bin/env python3 scripts/poll_price.py >> data/poll.log 2>&1
+```bash
+bin/start_menubar.sh
 ```
 
-If you use a virtualenv, point cron to the venv's `python` binary instead.
+**Web dashboard:**
+
+```bash
+bin/start_webapp.sh
+```
+
+Open `http://127.0.0.1:8000`.
+
+> **Note:** The web dashboard has no authentication. Keep `FLASK_HOST` set to `127.0.0.1` (the default). Do not expose it to the network.
 
 ## Notes
 
-- The dashboard reads from local SQLite history instead of hitting CoinMarketCap from the browser.
-- The saved check frequency affects the dashboard's expected next check time, but cron still needs to be configured separately to match it.
-- SMS alerts fire on threshold crossings, then re-arm once the price moves back across the threshold boundary.
-- If SMS credentials are missing, alerts are still recorded in the database as skipped.
+- Prices are fetched from Yahoo Finance — no API key required.
+- SMS alerts are skipped gracefully if Twilio credentials are missing.
+- Telegram alerts are skipped gracefully if bot token/chat ID are missing.
+- The saved poll frequency affects the menubar's next-check timer; the launchd/cron job must be configured separately to match.
