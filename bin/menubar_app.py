@@ -104,14 +104,18 @@ class BTCMenuBarApp(rumps.App):
 
         if status == "high":
             fbtc_color = NSColor.systemGreenColor()
+            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.36, 0.18, 1.0)
         elif status == "low":
             fbtc_color = NSColor.systemRedColor()
+            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.0, 0.0, 1.0)
         else:
             fbtc_color = NSColor.systemOrangeColor()
+            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.36, 0.0, 1.0)
         feth_color = NSColor.systemBlueColor()
+        feth_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.2, 0.9, 1.0)
 
         text_font = NSFont.monospacedSystemFontOfSize_weight_(8.0, 0.0)
-        bar_font  = NSFont.monospacedSystemFontOfSize_weight_(5.0, 0.0)
+        bar_font  = NSFont.monospacedSystemFontOfSize_weight_(5.5, 0.3)
 
         text_para = NSMutableParagraphStyle.alloc().init()
         text_para.setMinimumLineHeight_(8.5)
@@ -143,9 +147,9 @@ class BTCMenuBarApp(rumps.App):
 
         full = NSMutableAttributedString.alloc().init()
         full.appendAttributedString_(_seg(f"{fbtc_line}\n", _text_attrs(fbtc_color)))
-        full.appendAttributedString_(_seg(f"{fbtc_bar}\n", _bar_attrs(fbtc_color)))
+        full.appendAttributedString_(_seg(f"{fbtc_bar}\n", _bar_attrs(fbtc_bar_color)))
         full.appendAttributedString_(_seg(f"{feth_line}\n", _text_attrs(feth_color)))
-        full.appendAttributedString_(_seg(feth_bar,         _bar_attrs(feth_color)))
+        full.appendAttributedString_(_seg(feth_bar,         _bar_attrs(feth_bar_color)))
         btn = self._nsapp.nsstatusitem.button()
         btn.setAttributedTitle_(full)
         btn.sizeToFit()
@@ -169,6 +173,11 @@ class BTCMenuBarApp(rumps.App):
         slot = round(pos * (width - 1))
         inner = "".join("█" if i < slot else ("◆" if i == slot else "░") for i in range(width))
         return f"↓{inner}↑"
+
+    @staticmethod
+    def _bar_width_for_lines(*lines: str) -> int:
+        longest_line = max((len(line) for line in lines), default=8)
+        return max(8, int(longest_line * 1.45) - 2)
 
     def _update_menu_items(self, prices: dict, settings: dict) -> None:
         fbtc = prices.get("FBTC")
@@ -231,9 +240,10 @@ class BTCMenuBarApp(rumps.App):
         feth_low  = settings.get("feth_low_threshold")
 
         fbtc_line = f"B ${fbtc_price:.2f}" if fbtc_price is not None else "B —"
-        fbtc_bar  = self._make_bar(fbtc_price, fbtc_low, fbtc_high, width=6) if fbtc_price is not None else "────────"
         feth_line = f"E ${feth_price:.2f}" if feth_price is not None else "E —"
-        feth_bar  = self._make_bar(feth_price, feth_low, feth_high, width=6) if feth_price is not None else "────────"
+        bar_width = self._bar_width_for_lines(fbtc_line, feth_line)
+        fbtc_bar  = self._make_bar(fbtc_price, fbtc_low, fbtc_high, width=bar_width) if fbtc_price is not None else "─" * (bar_width + 2)
+        feth_bar  = self._make_bar(feth_price, feth_low, feth_high, width=bar_width) if feth_price is not None else "─" * (bar_width + 2)
         self._set_title(fbtc_line, fbtc_bar, feth_line, feth_bar, status=status)
 
         self._update_menu_items(prices, settings)
