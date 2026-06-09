@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FBTC / FETH Price Tracker</title>
+    <title>BTC / ETH Price Tracker</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
@@ -14,9 +14,9 @@
             Yahoo Finance + Twilio
             <span class="version-tag">v{{ app_version }}</span>
           </p>
-          <h1>FBTC / FETH price tracker</h1>
+          <h1>BTC / ETH price tracker</h1>
           <p class="intro">
-            Poll FBTC and FETH on your chosen interval, keep your own local history, and trigger
+            Poll BTC and ETH prices in USD on your chosen interval, keep your own local history, and trigger
             SMS alerts only when thresholds are crossed.
           </p>
         </div>
@@ -26,13 +26,13 @@
         <div class="section-header">
           <div>
             <p class="eyebrow">History</p>
-            <h2 id="chart-title">FBTC — Recent price samples</h2>
+            <h2 id="chart-title">BTC — Recent price samples</h2>
           </div>
           <div class="chart-controls">
             <div class="field chart-symbol">
               <div id="symbol-options" class="frequency-options" role="group" aria-label="Symbol">
-                <button type="button" class="frequency-option is-active" data-symbol="FBTC">FBTC</button>
-                <button type="button" class="frequency-option" data-symbol="FETH">FETH</button>
+                <button type="button" class="frequency-option is-active" data-symbol="BTC">BTC</button>
+                <button type="button" class="frequency-option" data-symbol="ETH">ETH</button>
               </div>
             </div>
             <label class="field field-cooldown inline-field chart-cooldown">
@@ -40,7 +40,7 @@
               <input id="cooldown-input" name="alert_cooldown_minutes" type="number" min="1" step="1" />
             </label>
             <div class="field field-frequency chart-frequency">
-              <input id="frequency-input" name="poll_frequency_minutes" type="hidden" value="15" />
+              <input id="frequency-input" name="poll_frequency_minutes" type="hidden" value="10" />
               <div class="frequency-row">
                 <span class="field-label inline-field-label">Frequency</span>
                 <div id="frequency-options" class="frequency-options" role="group" aria-label="Frequency">

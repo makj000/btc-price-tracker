@@ -17,11 +17,7 @@ from AppKit import (
     NSMutableAttributedString,
     NSMutableParagraphStyle,
     NSParagraphStyleAttributeName,
-    NSStatusBar,
-    NSVariableStatusItemLength,
 )
-import objc
-from Foundation import NSObject
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,57 +29,45 @@ from btc_tracker.poller import run_poll_cycle
 from btc_tracker.schedule import next_scheduled_check_at
 
 
-class _RefreshTarget(NSObject):
-    def initWithApp_(self, app):
-        self = objc.super(_RefreshTarget, self).init()
-        if self is None:
-            return None
-        self._app = app
-        return self
-
-    def refresh_(self, sender):
-        self._app._do_poll()
-
-
 class BTCMenuBarApp(rumps.App):
     def __init__(self) -> None:
-        super().__init__("FBTC", quit_button="Quit")
+        super().__init__("BTC", quit_button="Quit")
         self.config = load_config()
         init_db(self.config.database_path)
         seed_thresholds(self.config.database_path, self.config.seed_high_threshold, self.config.seed_low_threshold)
         self._last_poll_time = 0.0
 
-        self._fbtc_price_item = rumps.MenuItem("FBTC: —")
-        self._fbtc_high_item  = rumps.MenuItem("  ↑ High: not set")
-        self._fbtc_low_item   = rumps.MenuItem("  ↓ Low: not set")
+        self._btc_price_item = rumps.MenuItem("BTC: —")
+        self._btc_high_item  = rumps.MenuItem("  ↑ High: not set")
+        self._btc_low_item   = rumps.MenuItem("  ↓ Low: not set")
 
-        self._feth_price_item = rumps.MenuItem("FETH: —")
-        self._feth_high_item  = rumps.MenuItem("  ↑ High: not set")
-        self._feth_low_item   = rumps.MenuItem("  ↓ Low: not set")
+        self._eth_price_item = rumps.MenuItem("ETH: —")
+        self._eth_high_item  = rumps.MenuItem("  ↑ High: not set")
+        self._eth_low_item   = rumps.MenuItem("  ↓ Low: not set")
 
         self.menu = [
             rumps.MenuItem("↻  Refresh Prices", callback=self._run_check_now),
             None,
-            self._fbtc_price_item,
-            self._fbtc_high_item,
-            self._fbtc_low_item,
+            self._btc_price_item,
+            self._btc_high_item,
+            self._btc_low_item,
             None,
-            self._feth_price_item,
-            self._feth_high_item,
-            self._feth_low_item,
+            self._eth_price_item,
+            self._eth_high_item,
+            self._eth_low_item,
             None,
-            rumps.MenuItem("Set FBTC High…",  callback=self._set_fbtc_high),
-            rumps.MenuItem("Set FBTC Low…",   callback=self._set_fbtc_low),
-            rumps.MenuItem("Clear FBTC High", callback=self._clear_fbtc_high),
-            rumps.MenuItem("Clear FBTC Low",  callback=self._clear_fbtc_low),
+            rumps.MenuItem("Set BTC High…",  callback=self._set_btc_high),
+            rumps.MenuItem("Set BTC Low…",   callback=self._set_btc_low),
+            rumps.MenuItem("Clear BTC High", callback=self._clear_btc_high),
+            rumps.MenuItem("Clear BTC Low",  callback=self._clear_btc_low),
             None,
-            rumps.MenuItem("Set FETH High…",  callback=self._set_feth_high),
-            rumps.MenuItem("Set FETH Low…",   callback=self._set_feth_low),
-            rumps.MenuItem("Clear FETH High", callback=self._clear_feth_high),
-            rumps.MenuItem("Clear FETH Low",  callback=self._clear_feth_low),
+            rumps.MenuItem("Set ETH High…",  callback=self._set_eth_high),
+            rumps.MenuItem("Set ETH Low…",   callback=self._set_eth_low),
+            rumps.MenuItem("Clear ETH High", callback=self._clear_eth_high),
+            rumps.MenuItem("Clear ETH Low",  callback=self._clear_eth_low),
             None,
-            rumps.MenuItem("FBTC Chart ↗", callback=lambda _: webbrowser.open("https://finance.yahoo.com/chart/FBTC")),
-            rumps.MenuItem("FETH Chart ↗", callback=lambda _: webbrowser.open("https://finance.yahoo.com/chart/FETH")),
+            rumps.MenuItem("BTC Chart ↗", callback=lambda _: webbrowser.open("https://finance.yahoo.com/chart/BTC-USD")),
+            rumps.MenuItem("ETH Chart ↗", callback=lambda _: webbrowser.open("https://finance.yahoo.com/chart/ETH-USD")),
         ]
 
         self._timer = rumps.Timer(self._heartbeat, 30)
@@ -91,28 +75,21 @@ class BTCMenuBarApp(rumps.App):
         self._startup_timer = rumps.Timer(self._startup_poll, 1)
         self._startup_timer.start()
 
-        self._refresh_target = _RefreshTarget.alloc().initWithApp_(self)
-        self._refresh_status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
-        btn = self._refresh_status_item.button()
-        btn.setTitle_("↻")
-        btn.setTarget_(self._refresh_target)
-        btn.setAction_("refresh:")
-
-    def _set_title(self, fbtc_line: str, fbtc_bar: str, feth_line: str, feth_bar: str, status: str = "normal") -> None:
+    def _set_title(self, btc_line: str, btc_bar: str, eth_line: str, eth_bar: str, status: str = "normal") -> None:
         if not hasattr(self, "_nsapp") or not hasattr(self._nsapp, "nsstatusitem"):
             return
 
         if status == "high":
-            fbtc_color = NSColor.systemGreenColor()
-            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.36, 0.18, 1.0)
+            btc_color = NSColor.systemGreenColor()
+            btc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.36, 0.18, 1.0)
         elif status == "low":
-            fbtc_color = NSColor.systemRedColor()
-            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.0, 0.0, 1.0)
+            btc_color = NSColor.systemRedColor()
+            btc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.0, 0.0, 1.0)
         else:
-            fbtc_color = NSColor.systemOrangeColor()
-            fbtc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.36, 0.0, 1.0)
-        feth_color = NSColor.systemBlueColor()
-        feth_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.2, 0.9, 1.0)
+            btc_color = NSColor.systemOrangeColor()
+            btc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.36, 0.0, 1.0)
+        eth_color = NSColor.systemBlueColor()
+        eth_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.2, 0.9, 1.0)
 
         text_font = NSFont.monospacedSystemFontOfSize_weight_(8.0, 0.0)
         bar_font  = NSFont.monospacedSystemFontOfSize_weight_(5.5, 0.3)
@@ -146,10 +123,10 @@ class BTCMenuBarApp(rumps.App):
             return NSAttributedString.alloc().initWithString_attributes_(text, attrs)
 
         full = NSMutableAttributedString.alloc().init()
-        full.appendAttributedString_(_seg(f"{fbtc_line}\n", _text_attrs(fbtc_color)))
-        full.appendAttributedString_(_seg(f"{fbtc_bar}\n", _bar_attrs(fbtc_bar_color)))
-        full.appendAttributedString_(_seg(f"{feth_line}\n", _text_attrs(feth_color)))
-        full.appendAttributedString_(_seg(feth_bar,         _bar_attrs(feth_bar_color)))
+        full.appendAttributedString_(_seg(f"{btc_line}\n", _text_attrs(btc_color)))
+        full.appendAttributedString_(_seg(f"{btc_bar}\n", _bar_attrs(btc_bar_color)))
+        full.appendAttributedString_(_seg(f"{eth_line}\n", _text_attrs(eth_color)))
+        full.appendAttributedString_(_seg(eth_bar,         _bar_attrs(eth_bar_color)))
         btn = self._nsapp.nsstatusitem.button()
         btn.setAttributedTitle_(full)
         btn.sizeToFit()
@@ -180,20 +157,20 @@ class BTCMenuBarApp(rumps.App):
         return max(8, int(longest_line * 1.45) - 2)
 
     def _update_menu_items(self, prices: dict, settings: dict) -> None:
-        fbtc = prices.get("FBTC")
-        feth = prices.get("FETH")
-        fbtc_high = settings.get("high_threshold")
-        fbtc_low  = settings.get("low_threshold")
-        feth_high = settings.get("feth_high_threshold")
-        feth_low  = settings.get("feth_low_threshold")
+        btc = prices.get("BTC")
+        eth = prices.get("ETH")
+        btc_high = settings.get("high_threshold")
+        btc_low  = settings.get("low_threshold")
+        eth_high = settings.get("feth_high_threshold")
+        eth_low  = settings.get("feth_low_threshold")
 
-        self._fbtc_price_item.title = f"FBTC: ${fbtc:,.2f}" if fbtc is not None else "FBTC: —"
-        self._fbtc_high_item.title  = f"  ↑ High: ${fbtc_high:,.2f}" if fbtc_high is not None else "  ↑ High: not set"
-        self._fbtc_low_item.title   = f"  ↓ Low: ${fbtc_low:,.2f}"  if fbtc_low  is not None else "  ↓ Low: not set"
+        self._btc_price_item.title = f"BTC: ${btc:,.2f}" if btc is not None else "BTC: —"
+        self._btc_high_item.title  = f"  ↑ High: ${btc_high:,.2f}" if btc_high is not None else "  ↑ High: not set"
+        self._btc_low_item.title   = f"  ↓ Low: ${btc_low:,.2f}"  if btc_low  is not None else "  ↓ Low: not set"
 
-        self._feth_price_item.title = f"FETH: ${feth:,.2f}" if feth is not None else "FETH: —"
-        self._feth_high_item.title  = f"  ↑ High: ${feth_high:,.2f}" if feth_high is not None else "  ↑ High: not set"
-        self._feth_low_item.title   = f"  ↓ Low: ${feth_low:,.2f}"  if feth_low  is not None else "  ↓ Low: not set"
+        self._eth_price_item.title = f"ETH: ${eth:,.2f}" if eth is not None else "ETH: —"
+        self._eth_high_item.title  = f"  ↑ High: ${eth_high:,.2f}" if eth_high is not None else "  ↑ High: not set"
+        self._eth_low_item.title   = f"  ↓ Low: ${eth_low:,.2f}"  if eth_low  is not None else "  ↓ Low: not set"
 
     def _startup_poll(self, timer: rumps.Timer) -> None:
         timer.stop()
@@ -201,7 +178,7 @@ class BTCMenuBarApp(rumps.App):
 
     def _heartbeat(self, _) -> None:
         settings = get_settings(self.config.database_path)
-        latest = get_latest_price_sample(self.config.database_path, symbol="FBTC")
+        latest = get_latest_price_sample(self.config.database_path, symbol="BTC")
         if latest is None:
             self._do_poll()
             return
@@ -221,34 +198,34 @@ class BTCMenuBarApp(rumps.App):
         symbols  = result.get("symbols", {})
         prices   = {s: symbols[s]["price_usd"] for s in symbols if "price_usd" in symbols[s]}
 
-        fbtc_price = prices.get("FBTC")
-        feth_price = prices.get("FETH")
-        fbtc_high  = settings["high_threshold"]
-        fbtc_low   = settings["low_threshold"]
+        btc_price = prices.get("BTC")
+        eth_price = prices.get("ETH")
+        btc_high  = settings["high_threshold"]
+        btc_low   = settings["low_threshold"]
 
-        if fbtc_price is not None:
-            if fbtc_low  is not None and fbtc_price <= fbtc_low:
+        if btc_price is not None:
+            if btc_low  is not None and btc_price <= btc_low:
                 status = "low"
-            elif fbtc_high is not None and fbtc_price >= fbtc_high:
+            elif btc_high is not None and btc_price >= btc_high:
                 status = "high"
             else:
                 status = "normal"
         else:
             status = "normal"
 
-        feth_high = settings.get("feth_high_threshold")
-        feth_low  = settings.get("feth_low_threshold")
+        eth_high = settings.get("feth_high_threshold")
+        eth_low  = settings.get("feth_low_threshold")
 
-        fbtc_line = f"B ${fbtc_price:.2f}" if fbtc_price is not None else "B —"
-        feth_line = f"E ${feth_price:.2f}" if feth_price is not None else "E —"
-        bar_width = self._bar_width_for_lines(fbtc_line, feth_line)
-        fbtc_bar  = self._make_bar(fbtc_price, fbtc_low, fbtc_high, width=bar_width) if fbtc_price is not None else "─" * (bar_width + 2)
-        feth_bar  = self._make_bar(feth_price, feth_low, feth_high, width=bar_width) if feth_price is not None else "─" * (bar_width + 2)
-        self._set_title(fbtc_line, fbtc_bar, feth_line, feth_bar, status=status)
+        btc_line = f"B ${btc_price:.2f}" if btc_price is not None else "B —"
+        eth_line = f"E ${eth_price:.2f}" if eth_price is not None else "E —"
+        bar_width = self._bar_width_for_lines(btc_line, eth_line)
+        btc_bar  = self._make_bar(btc_price, btc_low, btc_high, width=bar_width) if btc_price is not None else "─" * (bar_width + 2)
+        eth_bar  = self._make_bar(eth_price, eth_low, eth_high, width=bar_width) if eth_price is not None else "─" * (bar_width + 2)
+        self._set_title(btc_line, btc_bar, eth_line, eth_bar, status=status)
 
         self._update_menu_items(prices, settings)
 
-        for sym in ["FBTC", "FETH"]:
+        for sym in ["BTC", "ETH"]:
             sym_result = symbols.get(sym, {})
             for event in sym_result.get("alerts", []):
                 if event["alert_type"] in ("HIGH", "LOW"):
@@ -262,39 +239,39 @@ class BTCMenuBarApp(rumps.App):
 
         self._last_poll_time = time.time()
 
-    # ── FBTC threshold controls ──────────────────────────────────────────────
+    # ── BTC threshold controls ───────────────────────────────────────────────
 
-    def _set_fbtc_high(self, _) -> None:
-        self._set_threshold("high_threshold", "FBTC High",
-                            "Alert when FBTC rises above this price (USD).")
+    def _set_btc_high(self, _) -> None:
+        self._set_threshold("high_threshold", "BTC High",
+                            "Alert when BTC rises above this price (USD).")
 
-    def _set_fbtc_low(self, _) -> None:
-        self._set_threshold("low_threshold", "FBTC Low",
-                            "Alert when FBTC falls below this price (USD).")
+    def _set_btc_low(self, _) -> None:
+        self._set_threshold("low_threshold", "BTC Low",
+                            "Alert when BTC falls below this price (USD).")
 
-    def _clear_fbtc_high(self, _) -> None:
+    def _clear_btc_high(self, _) -> None:
         save_settings(self.config.database_path, {"high_threshold": None, "high_alert_active": False})
         self._refresh_display()
 
-    def _clear_fbtc_low(self, _) -> None:
+    def _clear_btc_low(self, _) -> None:
         save_settings(self.config.database_path, {"low_threshold": None, "low_alert_active": False})
         self._refresh_display()
 
-    # ── FETH threshold controls ──────────────────────────────────────────────
+    # ── ETH threshold controls ───────────────────────────────────────────────
 
-    def _set_feth_high(self, _) -> None:
-        self._set_threshold("feth_high_threshold", "FETH High",
-                            "Alert when FETH rises above this price (USD).")
+    def _set_eth_high(self, _) -> None:
+        self._set_threshold("feth_high_threshold", "ETH High",
+                            "Alert when ETH rises above this price (USD).")
 
-    def _set_feth_low(self, _) -> None:
-        self._set_threshold("feth_low_threshold", "FETH Low",
-                            "Alert when FETH falls below this price (USD).")
+    def _set_eth_low(self, _) -> None:
+        self._set_threshold("feth_low_threshold", "ETH Low",
+                            "Alert when ETH falls below this price (USD).")
 
-    def _clear_feth_high(self, _) -> None:
+    def _clear_eth_high(self, _) -> None:
         save_settings(self.config.database_path, {"feth_high_threshold": None, "feth_high_alert_active": False})
         self._refresh_display()
 
-    def _clear_feth_low(self, _) -> None:
+    def _clear_eth_low(self, _) -> None:
         save_settings(self.config.database_path, {"feth_low_threshold": None, "feth_low_alert_active": False})
         self._refresh_display()
 
@@ -321,8 +298,8 @@ class BTCMenuBarApp(rumps.App):
     def _refresh_display(self) -> None:
         settings = get_settings(self.config.database_path)
         prices = {
-            "FBTC": (get_latest_price_sample(self.config.database_path, symbol="FBTC") or {}).get("price_usd"),
-            "FETH": (get_latest_price_sample(self.config.database_path, symbol="FETH") or {}).get("price_usd"),
+            "BTC": (get_latest_price_sample(self.config.database_path, symbol="BTC") or {}).get("price_usd"),
+            "ETH": (get_latest_price_sample(self.config.database_path, symbol="ETH") or {}).get("price_usd"),
         }
         self._update_menu_items(prices, settings)
 

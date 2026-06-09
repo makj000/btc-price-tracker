@@ -1,10 +1,10 @@
 # Crypto Price Tracker
 
-macOS menubar app + local web dashboard that polls FBTC and FETH prices via Yahoo Finance, stores history in SQLite, and sends Telegram/SMS alerts when configured thresholds are crossed.
+macOS menubar app + local web dashboard that polls BTC and ETH prices in USD via Yahoo Finance, stores history in SQLite, and sends Telegram/SMS alerts when configured thresholds are crossed.
 
 ## Features
 
-- macOS menubar item showing live FBTC (orange) and FETH (blue) prices with progress bars
+- macOS menubar item showing live BTC (orange) and ETH (blue) prices with progress bars
 - Local web dashboard for price history, settings, and alert log
 - Telegram and SMS (Twilio) alerts on threshold crossings
 - Threshold re-arming logic to avoid repeated alerts while price stays above/below

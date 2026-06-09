@@ -13,19 +13,20 @@ DEFAULT_SETTINGS = {
     "low_threshold": "",
     "alert_phone": "",
     "sms_enabled": "1",
-    "poll_frequency_minutes": "5",
+    "poll_frequency_minutes": "10",
     "alert_cooldown_minutes": "60",
     "high_alert_active": "0",
     "low_alert_active": "0",
     "last_high_alert_at": "",
     "last_low_alert_at": "",
-    # FETH
+    # ETH
     "feth_high_threshold": "",
     "feth_low_threshold": "",
     "feth_high_alert_active": "0",
     "feth_low_alert_active": "0",
     "feth_last_high_alert_at": "",
     "feth_last_low_alert_at": "",
+    "tracked_pair": "BTC_ETH",
 }
 
 
@@ -75,6 +76,7 @@ def init_db(database_path: Path) -> None:
         _migrate_alert_events_schema(connection)
         _migrate_telegram_status_column(connection)
         _migrate_symbol_columns(connection)
+        _migrate_tracked_pair_settings(connection)
 
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
@@ -148,7 +150,7 @@ def add_price_sample(
     price_usd: float,
     fetched_at: str,
     source: str = "yahoo",
-    symbol: str = "FBTC",
+    symbol: str = "BTC",
 ) -> None:
     with connect(database_path) as connection:
         connection.execute(
@@ -162,7 +164,7 @@ def add_price_sample(
 
 def get_latest_price_sample(
     database_path: Path,
-    symbol: str = "FBTC",
+    symbol: str = "BTC",
 ) -> dict[str, Any] | None:
     with connect(database_path) as connection:
         row = connection.execute(
@@ -184,7 +186,7 @@ def get_latest_price_sample(
 def get_price_history(
     database_path: Path,
     limit: int = 288,
-    symbol: str = "FBTC",
+    symbol: str = "BTC",
 ) -> list[dict[str, Any]]:
     with connect(database_path) as connection:
         rows = connection.execute(
@@ -213,7 +215,7 @@ def add_alert_event(
     sms_status: str,
     sms_message: str,
     telegram_status: str = "skipped",
-    symbol: str = "FBTC",
+    symbol: str = "BTC",
 ) -> None:
     with connect(database_path) as connection:
         connection.execute(
@@ -337,6 +339,40 @@ def _migrate_symbol_columns(connection: sqlite3.Connection) -> None:
     ae_cols = [c["name"] for c in connection.execute("PRAGMA table_info(alert_events)").fetchall()]
     if "symbol" not in ae_cols:
         connection.execute("ALTER TABLE alert_events ADD COLUMN symbol TEXT NOT NULL DEFAULT 'FBTC'")
+
+
+def _migrate_tracked_pair_settings(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT value FROM settings WHERE key = 'tracked_pair'"
+    ).fetchone()
+    if row is not None and row["value"] == "BTC_ETH":
+        return
+
+    reset_values = {
+        "high_threshold": "",
+        "low_threshold": "",
+        "high_alert_active": "0",
+        "low_alert_active": "0",
+        "last_high_alert_at": "",
+        "last_low_alert_at": "",
+        "feth_high_threshold": "",
+        "feth_low_threshold": "",
+        "feth_high_alert_active": "0",
+        "feth_low_alert_active": "0",
+        "feth_last_high_alert_at": "",
+        "feth_last_low_alert_at": "",
+        "poll_frequency_minutes": "10",
+        "tracked_pair": "BTC_ETH",
+    }
+    for key, value in reset_values.items():
+        connection.execute(
+            """
+            INSERT INTO settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
 
 
 def _serialize_setting_value(key: str, value: Any) -> str:

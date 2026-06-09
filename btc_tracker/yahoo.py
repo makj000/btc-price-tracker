@@ -9,9 +9,15 @@ class YahooFinanceError(RuntimeError):
     pass
 
 
+YAHOO_SYMBOLS = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+}
+
+
 def fetch_quote(symbol: str, *, timeout: int = 15) -> dict[str, str | float]:
-    # Use 5-day range so the most recent close is always available (handles weekends/holidays).
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=5d&interval=1d"
+    yahoo_symbol = YAHOO_SYMBOLS.get(symbol.upper(), symbol)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?range=1d&interval=1m"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -21,20 +27,27 @@ def fetch_quote(symbol: str, *, timeout: int = 15) -> dict[str, str | float]:
 
     try:
         result = data["chart"]["result"][0]
-        closes = [p for p in result["indicators"]["quote"][0]["close"] if p is not None]
-        price = float(closes[-1])
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        timestamp, price = next(
+            (timestamp, float(price))
+            for timestamp, price in reversed(list(zip(timestamps, closes)))
+            if price is not None
+        )
     except (KeyError, IndexError, TypeError) as exc:
         raise YahooFinanceError(f"Unexpected Yahoo Finance response for {symbol}: {exc}") from exc
+    except StopIteration as exc:
+        raise YahooFinanceError(f"Yahoo Finance returned no price for {symbol}") from exc
 
     return {
         "price_usd": price,
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
     }
 
 
-def fetch_fbtc_quote(*, timeout: int = 15) -> dict[str, str | float]:
-    return fetch_quote("FBTC", timeout=timeout)
+def fetch_btc_quote(*, timeout: int = 15) -> dict[str, str | float]:
+    return fetch_quote("BTC", timeout=timeout)
 
 
-def fetch_feth_quote(*, timeout: int = 15) -> dict[str, str | float]:
-    return fetch_quote("FETH", timeout=timeout)
+def fetch_eth_quote(*, timeout: int = 15) -> dict[str, str | float]:
+    return fetch_quote("ETH", timeout=timeout)

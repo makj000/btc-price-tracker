@@ -10,12 +10,12 @@ from btc_tracker.sms import SmsDeliveryError, send_sms
 from btc_tracker.telegram import TelegramDeliveryError, send_telegram
 from btc_tracker.yahoo import YahooFinanceError, fetch_quote
 
-SYMBOLS = ["FBTC", "FETH"]
+SYMBOLS = ["BTC", "ETH"]
 
-# Settings key prefixes per symbol. FBTC reuses the legacy unprefixed keys.
+# BTC reuses the primary settings keys; ETH retains the existing secondary keys.
 _SETTINGS_PREFIX = {
-    "FBTC": "",
-    "FETH": "feth_",
+    "BTC": "",
+    "ETH": "feth_",
 }
 
 
@@ -65,13 +65,12 @@ def run_poll_cycle(config: AppConfig) -> dict[str, Any]:
     if all_updates:
         settings = save_settings(config.database_path, all_updates)
 
-    # Primary price_usd / fetched_at from FBTC for backward-compat with callers
-    fbtc = results.get("FBTC", {})
+    btc = results.get("BTC", {})
     return {
-        "price_usd": fbtc.get("price_usd"),
-        "fetched_at": fbtc.get("fetched_at"),
+        "price_usd": btc.get("price_usd"),
+        "fetched_at": btc.get("fetched_at"),
         "next_check_at": next_scheduled_check_at(now, settings["poll_frequency_minutes"]).isoformat(),
-        "alerts": fbtc.get("alerts", []),
+        "alerts": btc.get("alerts", []),
         "settings": settings,
         "symbols": results,
     }

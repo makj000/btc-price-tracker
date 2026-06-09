@@ -8,7 +8,7 @@ const state = {
   alertsLoading: false,
   hoverIndex: null,
   editingThreshold: null,
-  activeSymbol: "FBTC",
+  activeSymbol: "BTC",
 };
 
 const settingsStatusEl = document.getElementById("settings-status");
@@ -49,7 +49,7 @@ async function loadDashboard() {
 
 
 function renderSettingsForm(settings) {
-  setFrequencySelection(settings.poll_frequency_minutes ?? 5);
+  setFrequencySelection(settings.poll_frequency_minutes ?? 10);
   document.getElementById("cooldown-input").value = settings.alert_cooldown_minutes ?? 60;
 }
 
@@ -63,10 +63,13 @@ function renderHistory(history) {
 
   chartEmptyEl.style.display = "none";
   const prices = history.map((point) => point.price_usd);
-  const thresholdValues = [
-    state.settings?.low_threshold,
-    state.settings?.high_threshold,
-  ].filter((value) => value !== null && value !== undefined);
+  const lowThresholdKey = thresholdKey("low");
+  const highThresholdKey = thresholdKey("high");
+  const lowThreshold = state.settings?.[lowThresholdKey];
+  const highThreshold = state.settings?.[highThresholdKey];
+  const thresholdValues = [lowThreshold, highThreshold].filter(
+    (value) => value !== null && value !== undefined
+  );
   const min = Math.min(...prices, ...thresholdValues);
   const max = Math.max(...prices, ...thresholdValues);
   const range = max - min || 1;
@@ -90,7 +93,7 @@ function renderHistory(history) {
   const latestPoint = projected[projected.length - 1];
   const latestX = latestPoint.x;
   const latestY = latestPoint.y;
-  const gapThresholdMs = (state.settings?.poll_frequency_minutes ?? 5) * 60 * 1000 * 1.5;
+  const gapThresholdMs = (state.settings?.poll_frequency_minutes ?? 10) * 60 * 1000 * 1.5;
   const lineSegments = [];
   const gapMarkers = [];
   let currentSegment = [];
@@ -167,13 +170,13 @@ function renderHistory(history) {
   }
 
   let thresholdMarkup = "";
-  if (state.settings?.low_threshold !== null && state.settings?.low_threshold !== undefined) {
+  if (lowThreshold !== null && lowThreshold !== undefined) {
     const lowY =
-      chartBottom - ((state.settings.low_threshold - min) / range) * (chartBottom - chartTop);
+      chartBottom - ((lowThreshold - min) / range) * (chartBottom - chartTop);
     thresholdMarkup += renderThresholdControl({
-      key: "low_threshold",
+      key: lowThresholdKey,
       label: "Low threshold",
-      value: state.settings.low_threshold,
+      value: lowThreshold,
       y: lowY,
       chartWidth,
       rightPad,
@@ -182,13 +185,13 @@ function renderHistory(history) {
       chartBottom,
     });
   }
-  if (state.settings?.high_threshold !== null && state.settings?.high_threshold !== undefined) {
+  if (highThreshold !== null && highThreshold !== undefined) {
     const highY =
-      chartBottom - ((state.settings.high_threshold - min) / range) * (chartBottom - chartTop);
+      chartBottom - ((highThreshold - min) / range) * (chartBottom - chartTop);
     thresholdMarkup += renderThresholdControl({
-      key: "high_threshold",
+      key: highThresholdKey,
       label: "High threshold",
-      value: state.settings.high_threshold,
+      value: highThreshold,
       y: highY,
       chartWidth,
       rightPad,
@@ -296,7 +299,7 @@ for (const optionEl of frequencyOptionEls) {
       return;
     }
 
-    const previousFrequency = Number(frequencyInputEl.value || state.settings?.poll_frequency_minutes || 5);
+    const previousFrequency = Number(frequencyInputEl.value || state.settings?.poll_frequency_minutes || 10);
     setFrequencySelection(frequency);
     try {
       await savePartialSettings({ poll_frequency_minutes: frequency });
@@ -342,7 +345,7 @@ async function runPollAndRefresh() {
   const parts = Object.entries(syms)
     .filter(([, v]) => v.price_usd != null)
     .map(([s, v]) => `${s}: ${formatMoney(v.price_usd)}`);
-  settingsStatusEl.textContent = parts.join("  |  ") || `FBTC: ${formatMoney(payload.price_usd)}`;
+  settingsStatusEl.textContent = parts.join("  |  ") || `BTC: ${formatMoney(payload.price_usd)}`;
   await loadDashboard();
 }
 
@@ -583,7 +586,7 @@ function cancelThresholdEdit() {
 
 function nextCheckFromHistory() {
   const latest = state.history[state.history.length - 1];
-  const frequencyMinutes = state.settings?.poll_frequency_minutes ?? 5;
+  const frequencyMinutes = state.settings?.poll_frequency_minutes ?? 10;
   const latestValue = latest ? latest.fetched_at : null;
   return nextScheduledCheckAt(latestValue, frequencyMinutes);
 }
@@ -622,6 +625,10 @@ function nextScheduledCheckAt(value, frequencyMinutes) {
   }
 
   return next.toISOString();
+}
+
+function thresholdKey(kind) {
+  return state.activeSymbol === "ETH" ? `feth_${kind}_threshold` : `${kind}_threshold`;
 }
 
 for (const el of symbolOptionEls) {

@@ -37,12 +37,12 @@ def index():
 def api_status():
     settings = get_settings(config.database_path)
     latest_prices = {s: get_latest_price_sample(config.database_path, symbol=s) for s in SYMBOLS}
-    fbtc_latest = latest_prices.get("FBTC")
+    btc_latest = latest_prices.get("BTC")
     return jsonify(
         {
-            "latest_price": fbtc_latest,
+            "latest_price": btc_latest,
             "latest_prices": latest_prices,
-            "next_check_at": _next_check_at(fbtc_latest, settings["poll_frequency_minutes"]),
+            "next_check_at": _next_check_at(btc_latest, settings["poll_frequency_minutes"]),
             "settings": settings,
             "version": __version__,
         }
@@ -52,7 +52,7 @@ def api_status():
 @app.get("/api/history")
 def api_history():
     requested_limit = request.args.get("limit", default=288, type=int)
-    symbol = request.args.get("symbol", default="FBTC").upper()
+    symbol = request.args.get("symbol", default="BTC").upper()
     if symbol not in SYMBOLS:
         return jsonify({"error": f"Unknown symbol. Valid: {', '.join(SYMBOLS)}"}), 400
     limit = max(1, min(requested_limit, 5000))
