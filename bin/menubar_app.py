@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import time
 import webbrowser
@@ -14,10 +16,21 @@ from AppKit import (
     NSFont,
     NSFontAttributeName,
     NSForegroundColorAttributeName,
+    NSMakeRect,
+    NSMinYEdge,
     NSMutableAttributedString,
     NSMutableParagraphStyle,
+    NSPopover,
     NSParagraphStyleAttributeName,
+    NSTextField,
+    NSTrackingActiveAlways,
+    NSTrackingArea,
+    NSTrackingInVisibleRect,
+    NSTrackingMouseEnteredAndExited,
+    NSView,
+    NSViewController,
 )
+from Foundation import NSObject
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -29,6 +42,21 @@ from btc_tracker.poller import run_poll_cycle
 from btc_tracker.schedule import next_scheduled_check_at
 
 
+class ThresholdHoverController(NSObject):
+    def initWithApp_(self, app):
+        self = self.init()
+        if self is None:
+            return None
+        self.app = app
+        return self
+
+    def mouseEntered_(self, event) -> None:
+        self.app._show_threshold_popover()
+
+    def mouseExited_(self, event) -> None:
+        self.app._hide_threshold_popover()
+
+
 class BTCMenuBarApp(rumps.App):
     def __init__(self) -> None:
         super().__init__("BTC", quit_button="Quit")
@@ -36,17 +64,22 @@ class BTCMenuBarApp(rumps.App):
         init_db(self.config.database_path)
         seed_thresholds(self.config.database_path, self.config.seed_high_threshold, self.config.seed_low_threshold)
         self._last_poll_time = 0.0
+        self._threshold_tooltip = "Thresholds loading..."
+        self._hover_controller = ThresholdHoverController.alloc().initWithApp_(self)
+        self._tracking_button = None
+        self._threshold_popover = None
 
         self._btc_price_item = rumps.MenuItem("BTC: —")
-        self._btc_high_item  = rumps.MenuItem("  ↑ High: not set")
-        self._btc_low_item   = rumps.MenuItem("  ↓ Low: not set")
+        self._btc_high_item  = rumps.MenuItem("  ↑ High: not set", callback=self._set_btc_high)
+        self._btc_low_item   = rumps.MenuItem("  ↓ Low: not set",  callback=self._set_btc_low)
 
         self._eth_price_item = rumps.MenuItem("ETH: —")
-        self._eth_high_item  = rumps.MenuItem("  ↑ High: not set")
-        self._eth_low_item   = rumps.MenuItem("  ↓ Low: not set")
+        self._eth_high_item  = rumps.MenuItem("  ↑ High: not set", callback=self._set_eth_high)
+        self._eth_low_item   = rumps.MenuItem("  ↓ Low: not set",  callback=self._set_eth_low)
 
         self.menu = [
             rumps.MenuItem("↻  Refresh Prices", callback=self._run_check_now),
+            rumps.MenuItem("⟳  Restart App",    callback=self._restart),
             None,
             self._btc_price_item,
             self._btc_high_item,
@@ -56,13 +89,9 @@ class BTCMenuBarApp(rumps.App):
             self._eth_high_item,
             self._eth_low_item,
             None,
-            rumps.MenuItem("Set BTC High…",  callback=self._set_btc_high),
-            rumps.MenuItem("Set BTC Low…",   callback=self._set_btc_low),
             rumps.MenuItem("Clear BTC High", callback=self._clear_btc_high),
             rumps.MenuItem("Clear BTC Low",  callback=self._clear_btc_low),
             None,
-            rumps.MenuItem("Set ETH High…",  callback=self._set_eth_high),
-            rumps.MenuItem("Set ETH Low…",   callback=self._set_eth_low),
             rumps.MenuItem("Clear ETH High", callback=self._clear_eth_high),
             rumps.MenuItem("Clear ETH Low",  callback=self._clear_eth_low),
             None,
@@ -86,7 +115,7 @@ class BTCMenuBarApp(rumps.App):
             btc_color = NSColor.systemRedColor()
             btc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.0, 0.0, 1.0)
         else:
-            btc_color = NSColor.systemOrangeColor()
+            btc_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.68, 0.27, 0.0, 1.0)
             btc_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.36, 0.0, 1.0)
         eth_color = NSColor.systemBlueColor()
         eth_bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.2, 0.9, 1.0)
@@ -131,9 +160,57 @@ class BTCMenuBarApp(rumps.App):
         btn.setAttributedTitle_(full)
         btn.sizeToFit()
         self._nsapp.nsstatusitem.setLength_(btn.frame().size.width)
+        self._install_hover_tracking(btn)
         btn.setWantsLayer_(True)
         btn.layer().setBackgroundColor_(NSColor.whiteColor().CGColor())
         btn.layer().setCornerRadius_(3.0)
+
+    def _install_hover_tracking(self, btn) -> None:
+        if btn is self._tracking_button:
+            return
+        options = NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+        area = NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+            NSMakeRect(0, 0, 0, 0),
+            options,
+            self._hover_controller,
+            None,
+        )
+        btn.addTrackingArea_(area)
+        self._tracking_button = btn
+
+    def _show_threshold_popover(self) -> None:
+        if not hasattr(self, "_nsapp") or not hasattr(self._nsapp, "nsstatusitem"):
+            return
+        btn = self._nsapp.nsstatusitem.button()
+        if btn is None:
+            return
+        if self._threshold_popover is not None and self._threshold_popover.isShown():
+            return
+
+        text = NSTextField.alloc().initWithFrame_(NSMakeRect(12, 10, 220, 108))
+        text.setStringValue_(self._threshold_tooltip)
+        text.setEditable_(False)
+        text.setSelectable_(False)
+        text.setBezeled_(False)
+        text.setDrawsBackground_(False)
+        text.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12.0, 0.0))
+
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 244, 128))
+        view.addSubview_(text)
+
+        controller = NSViewController.alloc().init()
+        controller.setView_(view)
+
+        popover = NSPopover.alloc().init()
+        popover.setContentViewController_(controller)
+        popover.setAnimates_(False)
+        popover.showRelativeToRect_ofView_preferredEdge_(btn.bounds(), btn, NSMinYEdge)
+        self._threshold_popover = popover
+
+    def _hide_threshold_popover(self) -> None:
+        if self._threshold_popover is not None:
+            self._threshold_popover.close()
+            self._threshold_popover = None
 
     @staticmethod
     def _make_bar(price: float, low: float | None, high: float | None, width: int = 8) -> str:
@@ -171,6 +248,30 @@ class BTCMenuBarApp(rumps.App):
         self._eth_price_item.title = f"ETH: ${eth:,.2f}" if eth is not None else "ETH: —"
         self._eth_high_item.title  = f"  ↑ High: ${eth_high:,.2f}" if eth_high is not None else "  ↑ High: not set"
         self._eth_low_item.title   = f"  ↓ Low: ${eth_low:,.2f}"  if eth_low  is not None else "  ↓ Low: not set"
+        self._threshold_tooltip = self._format_threshold_tooltip(prices, settings)
+        self._apply_threshold_tooltip()
+
+    def _apply_threshold_tooltip(self) -> None:
+        if self._threshold_popover is not None and self._threshold_popover.isShown():
+            self._hide_threshold_popover()
+            self._show_threshold_popover()
+
+    @staticmethod
+    def _format_threshold_tooltip(prices: dict, settings: dict) -> str:
+        def money(value: float | None) -> str:
+            return f"${value:,.2f}" if value is not None else "not set"
+
+        btc = prices.get("BTC")
+        eth = prices.get("ETH")
+        return "\n".join([
+            f"BTC {money(btc)}",
+            f"High: {money(settings.get('high_threshold'))}",
+            f"Low: {money(settings.get('low_threshold'))}",
+            "",
+            f"ETH {money(eth)}",
+            f"High: {money(settings.get('feth_high_threshold'))}",
+            f"Low: {money(settings.get('feth_low_threshold'))}",
+        ])
 
     def _startup_poll(self, timer: rumps.Timer) -> None:
         timer.stop()
@@ -221,9 +322,8 @@ class BTCMenuBarApp(rumps.App):
         bar_width = self._bar_width_for_lines(btc_line, eth_line)
         btc_bar  = self._make_bar(btc_price, btc_low, btc_high, width=bar_width) if btc_price is not None else "─" * (bar_width + 2)
         eth_bar  = self._make_bar(eth_price, eth_low, eth_high, width=bar_width) if eth_price is not None else "─" * (bar_width + 2)
-        self._set_title(btc_line, btc_bar, eth_line, eth_bar, status=status)
-
         self._update_menu_items(prices, settings)
+        self._set_title(btc_line, btc_bar, eth_line, eth_bar, status=status)
 
         for sym in ["BTC", "ETH"]:
             sym_result = symbols.get(sym, {})
@@ -306,6 +406,21 @@ class BTCMenuBarApp(rumps.App):
     def _run_check_now(self, _) -> None:
         self._do_poll()
 
+    def _restart(self, _) -> None:
+        python_app = next((parent for parent in Path(sys.executable).parents if parent.suffix == ".app"), None)
+        if python_app is not None:
+            subprocess.Popen(["open", "-n", str(python_app), "--args", str(Path(__file__).resolve())])
+            return
+
+        log = Path("/tmp/crypto-price-tracker-menubar.log").open("a")
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve())],
+            cwd=str(PROJECT_ROOT),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
     def _parse_timestamp(self, value: str) -> datetime:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -314,9 +429,8 @@ class BTCMenuBarApp(rumps.App):
 
 
 if __name__ == "__main__":
-    import os, signal
+    import signal
     my_pid = os.getpid()
-    import subprocess
     result = subprocess.run(["pgrep", "-f", "menubar_app.py"], capture_output=True, text=True)
     other_pids = [int(p) for p in result.stdout.split() if p.strip() and int(p) != my_pid]
     if other_pids:
